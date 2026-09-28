@@ -1,0 +1,15 @@
+# Godot 4
+.godot/
+/android/
+
+# Export presets can contain credentials (keystore passwords, etc.)
+# Remove this line if you want presets shared in the repo
+export_presets.cfg
+
+# Build output
+/builds/
+/export/
+
+# OS
+.DS_Store
+Thumbs.db
