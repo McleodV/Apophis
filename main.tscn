@@ -1,0 +1,36 @@
+[gd_scene format=3 uid="uid://byd54crabqi7b"]
+
+[ext_resource type="Script" uid="uid://dtdj1ns6xq32v" path="res://board/hexBoard.gd" id="1_ig7tw"]
+[ext_resource type="Script" uid="uid://cm1rprwekvgjd" path="res://board/debug/hexBoardDebug.gd" id="2_0xm2m"]
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_0xm2m"]
+sky_horizon_color = Color(0.66224277, 0.6717428, 0.6867428, 1)
+ground_horizon_color = Color(0.66224277, 0.6717428, 0.6867428, 1)
+
+[sub_resource type="Sky" id="Sky_h2yge"]
+sky_material = SubResource("ProceduralSkyMaterial_0xm2m")
+
+[sub_resource type="Environment" id="Environment_1bvp3"]
+background_mode = 2
+sky = SubResource("Sky_h2yge")
+tonemap_mode = 2
+glow_enabled = true
+
+[node name="Main" type="Node3D" unique_id=1029017008]
+
+[node name="Board" type="Node3D" parent="." unique_id=61320986]
+script = ExtResource("1_ig7tw")
+
+[node name="BoardDebug" type="Node" parent="." unique_id=1675141696 node_paths=PackedStringArray("board")]
+script = ExtResource("2_0xm2m")
+board = NodePath("../Board")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1845186055]
+transform = Transform3D(-0.8660254, -0.43301278, 0.25, 0, 0.49999997, 0.86602545, -0.50000006, 0.75, -0.43301266, 0, 0, 0)
+shadow_enabled = true
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=264380280]
+environment = SubResource("Environment_1bvp3")
+
+[node name="Camera3D" type="Camera3D" parent="." unique_id=49212067]
+transform = Transform3D(1, 0, 0, 0, 0.64278764, 0.76604444, 0, -0.76604444, 0.64278764, 0, 25, 22)
