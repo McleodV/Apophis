@@ -44,9 +44,9 @@ func _ensure_defaults() -> void:
 	if material == null:
 		var debug_material := StandardMaterial3D.new()
 		debug_material.vertex_color_use_as_albedo = true
+		debug_material.vertex_color_is_srgb = true
 		debug_material.roughness = 1.0
 		material = debug_material
-
 
 func _get_or_create_chunk(key: Vector2i) -> HexChunk:
 	if _chunks.has(key):
