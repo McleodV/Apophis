@@ -5,7 +5,7 @@ extends RefCounted
 ## Vertices are derived only from lattice points and map data, so chunk borders match exactly.
 
 # Debug coloring until the terrain shader exists.
-const _CLIFF_NORMAL_Y: float = 0.6 # Normals flatter than this are colored as cliff
+const _CLIFF_NORMAL_Y: float = 0.6 # Faces with normal.y below this are cliffs
 const _CLIFF_COLOR := Color(0.42, 0.39, 0.36)
 const _LOW_COLOR := Color(0.25, 0.42, 0.18)
 const _HIGH_COLOR := Color(0.72, 0.68, 0.52)
@@ -46,25 +46,50 @@ func _build(tiles: Array[Vector2i]) -> ArrayMesh:
 						_add_triangle(p + u, p + w, p + u + w)
 	return _create_mesh()
 
-
 func _add_triangle(a: Vector2i, b: Vector2i, c: Vector2i) -> void:
 	_indices.append(_get_vertex(a))
 	_indices.append(_get_vertex(b))
 	_indices.append(_get_vertex(c))
 
-
 func _get_vertex(point: Vector2i) -> int:
 	if _vertex_ids.has(point):
 		return _vertex_ids[point]
 	var vertex: Vector3 = _get_position(point)
-	var normal: Vector3 = _get_normal(point, vertex)
 	var index: int = _positions.size()
 	_positions.append(vertex)
-	_normals.append(normal)
-	_colors.append(_get_color(vertex.y, normal))
+	_add_shading(point, vertex)
 	_vertex_ids[point] = index
 	return index
 
+# Appends the normal and color for a vertex.
+# Cliff and ground faces are averaged separately, then blended at a fixed ratio,
+# so cliff edges shade the same regardless of how many faces of each kind touch the point.
+# Uses neighbors outside the chunk too, so results match across chunk borders.
+func _add_shading(point: Vector2i, vertex: Vector3) -> void:
+	var ground_sum := Vector3.ZERO
+	var cliff_sum := Vector3.ZERO
+	var previous: Vector3 = _get_position(point + HexLattice.NEIGHBORS[5]) - vertex
+	for neighbor: Vector2i in HexLattice.NEIGHBORS:
+		var current: Vector3 = _get_position(point + neighbor) - vertex
+		var face: Vector3 = current.cross(previous)
+		if face.normalized().y < _CLIFF_NORMAL_Y:
+			cliff_sum += face
+		else:
+			ground_sum += face
+		previous = current
+	if cliff_sum == Vector3.ZERO:
+		_normals.append(ground_sum.normalized())
+		_colors.append(_get_ground_color(vertex.y))
+		return
+	var normal: Vector3 = cliff_sum.normalized()
+	if ground_sum != Vector3.ZERO:
+		normal = normal.slerp(ground_sum.normalized(), _settings.cliff_edge_softness)
+	_normals.append(normal)
+	_colors.append(_CLIFF_COLOR)
+
+func _get_ground_color(height: float) -> Color:
+	var max_height: float = maxf(_data.get_max_elevation() * _settings.elevation_step, 0.001)
+	return _LOW_COLOR.lerp(_HIGH_COLOR, clampf(height / max_height, 0.0, 1.0))
 
 func _get_position(point: Vector2i) -> Vector3:
 	if _cached_positions.has(point):
@@ -74,25 +99,9 @@ func _get_position(point: Vector2i) -> Vector3:
 	_cached_positions[point] = vertex
 	return vertex
 
-
-# Averages the 6 surrounding lattice triangles. Uses neighbors outside the chunk too,
-# so normals match across chunk borders.
-func _get_normal(point: Vector2i, vertex: Vector3) -> Vector3:
-	var normal := Vector3.ZERO
-	var previous: Vector3 = _get_position(point + HexLattice.NEIGHBORS[5]) - vertex
-	for neighbor: Vector2i in HexLattice.NEIGHBORS:
-		var current: Vector3 = _get_position(point + neighbor) - vertex
-		normal += current.cross(previous)
-		previous = current
-	return normal.normalized()
-
-
-func _get_color(height: float, normal: Vector3) -> Color:
-	if normal.y < _CLIFF_NORMAL_Y:
-		return _CLIFF_COLOR
+func _get_color(height: float) -> Color:
 	var max_height: float = maxf(_data.get_max_elevation() * _settings.elevation_step, 0.001)
 	return _LOW_COLOR.lerp(_HIGH_COLOR, clampf(height / max_height, 0.0, 1.0))
-
 
 func _create_mesh() -> ArrayMesh:
 	var mesh := ArrayMesh.new()
