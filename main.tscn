@@ -2,6 +2,8 @@
 
 [ext_resource type="Script" uid="uid://dtdj1ns6xq32v" path="res://board/hexBoard.gd" id="1_ig7tw"]
 [ext_resource type="Script" uid="uid://cm1rprwekvgjd" path="res://board/debug/hexBoardDebug.gd" id="2_0xm2m"]
+[ext_resource type="Script" uid="uid://da63qarde3fmy" path="res://camera/strategyCamera.gd" id="3_h2yge"]
+[ext_resource type="Script" uid="uid://bs3tccmp4ga1l" path="res://camera/strategyCameraInput.gd" id="4_1bvp3"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_0xm2m"]
 sky_horizon_color = Color(0.66224277, 0.6717428, 0.6867428, 1)
@@ -32,5 +34,10 @@ shadow_enabled = true
 [node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=264380280]
 environment = SubResource("Environment_1bvp3")
 
-[node name="Camera3D" type="Camera3D" parent="." unique_id=49212067]
+[node name="StrategyCamera" type="Camera3D" parent="." unique_id=49212067 node_paths=PackedStringArray("board")]
 transform = Transform3D(1, 0, 0, 0, 0.64278764, 0.76604444, 0, -0.76604444, 0.64278764, 0, 25, 22)
+script = ExtResource("3_h2yge")
+board = NodePath("../Board")
+
+[node name="CameraInput" type="Node" parent="StrategyCamera" unique_id=265415635]
+script = ExtResource("4_1bvp3")

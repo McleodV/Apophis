@@ -23,6 +23,27 @@ func set_map_data(data: HexMapData) -> void:
 	rebuild_all()
 
 
+## Terrain height at a world position. 0 if no map is set.
+func get_height(world_position: Vector3) -> float:
+	if map_data == null:
+		return 0.0
+	return HexTerrainHeight.get_height(map_data, settings, world_position)
+
+
+## Highest possible terrain height. 0 if no map is set.
+func get_max_height() -> float:
+	if map_data == null:
+		return 0.0
+	return map_data.get_max_elevation() * settings.elevation_step
+
+
+## Distance from the board center to the farthest tile center. 0 if no map is set.
+func get_world_radius() -> float:
+	if map_data == null:
+		return 0.0
+	return map_data.radius * HexMath.SQRT3 * HexMath.OUTER_RADIUS
+
+
 ## Recreates every chunk. Use after changing settings.
 func rebuild_all() -> void:
 	_ensure_defaults()
@@ -47,6 +68,7 @@ func _ensure_defaults() -> void:
 		debug_material.vertex_color_is_srgb = true
 		debug_material.roughness = 1.0
 		material = debug_material
+
 
 func _get_or_create_chunk(key: Vector2i) -> HexChunk:
 	if _chunks.has(key):
