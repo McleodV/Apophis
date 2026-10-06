@@ -9,9 +9,12 @@ signal elevation_changed(axial: Vector2i)
 var radius: int = 0
 ## Number of discrete elevations. Valid elevations are 0 to elevation_levels - 1.
 var elevation_levels: int = 10
+## Set once during generation. Fixed for the whole run.
+var biome: HexBiome
 
 var _size: int = 0 # Side length of the backing square grid
 var _elevations: PackedByteArray = PackedByteArray()
+var _base_output: PackedByteArray = PackedByteArray() # HexResource.COUNT bytes per grid slot
 
 
 func _init(map_radius: int = 0, levels: int = 10) -> void:
@@ -25,6 +28,8 @@ func setup(map_radius: int, levels: int) -> void:
 	_size = radius * 2 + 1
 	_elevations = PackedByteArray()
 	_elevations.resize(_size * _size)
+	_base_output = PackedByteArray()
+	_base_output.resize(_size * _size * HexResource.COUNT)
 
 
 func has_tile(axial: Vector2i) -> bool:
@@ -60,6 +65,34 @@ func set_elevation(axial: Vector2i, value: int) -> void:
 		return
 	_elevations[index] = clamped
 	elevation_changed.emit(axial)
+
+
+## Starting output of one HexResource.Type. Returns 0 for tiles outside the map.
+func get_base_output(axial: Vector2i, type: int) -> int:
+	if not has_tile(axial):
+		return 0
+	return _base_output[_to_index(axial) * HexResource.COUNT + type]
+
+
+## Combined starting output of all types. Returns 0 for tiles outside the map.
+func get_base_output_total(axial: Vector2i) -> int:
+	if not has_tile(axial):
+		return 0
+	var start: int = _to_index(axial) * HexResource.COUNT
+	var total: int = 0
+	for i: int in HexResource.COUNT:
+		total += _base_output[start + i]
+	return total
+
+
+## Generation only. Tile colors read base output when HexBoard.set_map_data() is called.
+## Clamps so the tile total stays within HexResource.MAX_TILE_TOTAL.
+func set_base_output(axial: Vector2i, type: int, value: int) -> void:
+	if not has_tile(axial):
+		return
+	var index: int = _to_index(axial) * HexResource.COUNT + type
+	var others: int = get_base_output_total(axial) - _base_output[index]
+	_base_output[index] = clampi(value, 0, HexResource.MAX_TILE_TOTAL - others)
 
 
 # Maps axial coordinates into the backing square grid.

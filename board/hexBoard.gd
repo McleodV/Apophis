@@ -5,11 +5,18 @@ extends Node3D
 
 ## Leave empty to use defaults.
 @export var settings: HexTerrainSettings
-## Leave empty to use a vertex-colored debug material.
-@export var material: Material
+## Leave empty to use defaults.
+@export var style: HexTerrainStyle
+@export var grid_visible: bool = true:
+	set(value):
+		grid_visible = value
+		if _material:
+			HexTerrainMaterial.set_grid_visible(_material, value)
 
 var map_data: HexMapData
 
+var _material: ShaderMaterial
+var _tile_texture: HexTileTexture
 var _chunks: Dictionary = {} # Chunk key -> HexChunk
 var _dirty_chunks: Dictionary = {} # Chunk key -> true
 var _rebuild_queued: bool = false
@@ -20,6 +27,7 @@ func set_map_data(data: HexMapData) -> void:
 		map_data.elevation_changed.disconnect(_on_elevation_changed)
 	map_data = data
 	map_data.elevation_changed.connect(_on_elevation_changed)
+	_tile_texture = HexTileTexture.new(map_data)
 	rebuild_all()
 
 
@@ -44,9 +52,10 @@ func get_world_radius() -> float:
 	return map_data.radius * HexMath.SQRT3 * HexMath.OUTER_RADIUS
 
 
-## Recreates every chunk. Use after changing settings.
+## Recreates every chunk and reapplies the material. Use after changing settings or style.
 func rebuild_all() -> void:
 	_ensure_defaults()
+	_apply_material()
 	for chunk: HexChunk in _chunks.values():
 		chunk.queue_free()
 	_chunks.clear()
@@ -62,12 +71,18 @@ func rebuild_all() -> void:
 func _ensure_defaults() -> void:
 	if settings == null:
 		settings = HexTerrainSettings.new()
-	if material == null:
-		var debug_material := StandardMaterial3D.new()
-		debug_material.vertex_color_use_as_albedo = true
-		debug_material.vertex_color_is_srgb = true
-		debug_material.roughness = 1.0
-		material = debug_material
+	if style == null:
+		style = HexTerrainStyle.new()
+	if _material == null:
+		_material = HexTerrainMaterial.create()
+
+
+func _apply_material() -> void:
+	HexTerrainMaterial.apply_settings(_material, settings)
+	HexTerrainMaterial.apply_style(_material, style)
+	HexTerrainMaterial.set_grid_visible(_material, grid_visible)
+	if map_data:
+		HexTerrainMaterial.apply_map(_material, map_data, _tile_texture.texture)
 
 
 func _get_or_create_chunk(key: Vector2i) -> HexChunk:
@@ -75,7 +90,7 @@ func _get_or_create_chunk(key: Vector2i) -> HexChunk:
 		return _chunks[key]
 	var chunk := HexChunk.new()
 	chunk.name = "Chunk_%d_%d" % [key.x, key.y]
-	chunk.material_override = material
+	chunk.material_override = _material
 	add_child(chunk)
 	_chunks[key] = chunk
 	return chunk
@@ -91,6 +106,7 @@ func _get_chunk_key(axial: Vector2i) -> Vector2i:
 
 
 func _on_elevation_changed(axial: Vector2i) -> void:
+	_tile_texture.write_tile(axial)
 	# Heights reach 1 tile out; normals reach 1 more.
 	for nearby: Vector2i in HexMath.get_in_range(axial, 2):
 		if map_data.has_tile(nearby):
@@ -101,6 +117,7 @@ func _on_elevation_changed(axial: Vector2i) -> void:
 
 
 func _rebuild_dirty_chunks() -> void:
+	_tile_texture.flush()
 	for key: Vector2i in _dirty_chunks:
 		_chunks[key].rebuild(map_data, settings)
 	_dirty_chunks.clear()

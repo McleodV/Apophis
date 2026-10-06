@@ -2,6 +2,7 @@
 
 [ext_resource type="Script" uid="uid://dtdj1ns6xq32v" path="res://board/hexBoard.gd" id="1_ig7tw"]
 [ext_resource type="Script" uid="uid://cm1rprwekvgjd" path="res://board/debug/hexBoardDebug.gd" id="2_0xm2m"]
+[ext_resource type="Script" uid="uid://1him3bsgmh8w" path="res://board/hexBoardInput.gd" id="2_lquwl"]
 [ext_resource type="Script" uid="uid://da63qarde3fmy" path="res://camera/strategyCamera.gd" id="3_h2yge"]
 [ext_resource type="Script" uid="uid://bs3tccmp4ga1l" path="res://camera/strategyCameraInput.gd" id="4_1bvp3"]
 
@@ -22,6 +23,10 @@ glow_enabled = true
 
 [node name="Board" type="Node3D" parent="." unique_id=61320986]
 script = ExtResource("1_ig7tw")
+
+[node name="HexBoardInput" type="Node" parent="Board" unique_id=1519937204]
+script = ExtResource("2_lquwl")
+metadata/_custom_type_script = "uid://1him3bsgmh8w"
 
 [node name="BoardDebug" type="Node" parent="." unique_id=1675141696 node_paths=PackedStringArray("board")]
 script = ExtResource("2_0xm2m")

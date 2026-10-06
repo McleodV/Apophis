@@ -1,0 +1,20 @@
+[gd_resource type="Resource" script_class="HexBiomeSet" format=3]
+
+[ext_resource type="Script" path="res://board/biome/hexBiomeSet.gd" id="1_set"]
+[ext_resource type="Script" path="res://board/biome/hexBiome.gd" id="2_biome"]
+[ext_resource type="Resource" path="res://board/biome/biomes/food/grassland.tres" id="3_grassland"]
+[ext_resource type="Resource" path="res://board/biome/biomes/food/jungle.tres" id="4_jungle"]
+[ext_resource type="Resource" path="res://board/biome/biomes/food/wetland.tres" id="5_wetland"]
+[ext_resource type="Resource" path="res://board/biome/biomes/trade/steppe.tres" id="6_steppe"]
+[ext_resource type="Resource" path="res://board/biome/biomes/trade/arid.tres" id="7_arid"]
+[ext_resource type="Resource" path="res://board/biome/biomes/trade/desert.tres" id="8_desert"]
+[ext_resource type="Resource" path="res://board/biome/biomes/industry/highlands.tres" id="9_highlands"]
+[ext_resource type="Resource" path="res://board/biome/biomes/industry/badlands.tres" id="10_badlands"]
+[ext_resource type="Resource" path="res://board/biome/biomes/industry/volcanic.tres" id="11_volcanic"]
+[ext_resource type="Resource" path="res://board/biome/biomes/phenomena/impactCrater.tres" id="12_impactCrater"]
+[ext_resource type="Resource" path="res://board/biome/biomes/phenomena/crystalFields.tres" id="13_crystalFields"]
+[ext_resource type="Resource" path="res://board/biome/biomes/phenomena/fungalBloom.tres" id="14_fungalBloom"]
+
+[resource]
+script = ExtResource("1_set")
+biomes = Array[ExtResource("2_biome")]([ExtResource("3_grassland"), ExtResource("4_jungle"), ExtResource("5_wetland"), ExtResource("6_steppe"), ExtResource("7_arid"), ExtResource("8_desert"), ExtResource("9_highlands"), ExtResource("10_badlands"), ExtResource("11_volcanic"), ExtResource("12_impactCrater"), ExtResource("13_crystalFields"), ExtResource("14_fungalBloom")])
