@@ -2,7 +2,7 @@ class_name HexTerrainMaterial
 extends Object
 ## Static setup for the terrain ShaderMaterial.
 
-const _SHADER: Shader = preload("res://board/hexTerrain.gdshader")
+const _SHADER: Shader = preload("res://board/shaders/hexTerrain.gdshader")
 
 
 static func create() -> ShaderMaterial:
@@ -20,6 +20,9 @@ static func apply_settings(material: ShaderMaterial, settings: HexTerrainSetting
 
 static func apply_style(material: ShaderMaterial, style: HexTerrainStyle) -> void:
 	material.set_shader_parameter("output_strength", _to_value_array(style.output_strength))
+	material.set_shader_parameter("border_blend", style.border_blend)
+	material.set_shader_parameter("border_warp", style.border_warp)
+	material.set_shader_parameter("border_warp_frequency", style.border_warp_frequency)
 	material.set_shader_parameter("grid_color", style.grid_color)
 	material.set_shader_parameter("grid_width_pixels", style.grid_width_pixels)
 
