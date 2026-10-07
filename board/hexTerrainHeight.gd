@@ -47,6 +47,15 @@ static func get_height(data: HexMapData, settings: HexTerrainSettings, world_pos
 	return best * settings.elevation_step
 
 
+## World height at a point on the edge shared by tiles a and b, seen only from those two.
+## Matches get_height() except at the edge's corners, where a third tile is ignored. b may be off the map.
+static func get_edge_height(data: HexMapData, settings: HexTerrainSettings, a: Vector2i, b: Vector2i, world_position: Vector3) -> float:
+	var level: float = _get_owner_level(data, settings, a, _get_offset(a, world_position))
+	if data.has_tile(b):
+		level = maxf(level, _get_owner_level(data, settings, b, _get_offset(b, world_position)))
+	return level * settings.elevation_step
+
+
 # Height in elevation levels, as seen from one tile.
 static func _get_owner_level(data: HexMapData, settings: HexTerrainSettings, owner: Vector2i, offset: Vector2) -> float:
 	# Blend within the triangle formed by the owner and the two neighbors nearest this point.

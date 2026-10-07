@@ -28,10 +28,34 @@ static func get_band_push(position: Vector3, bottom: float, top: float, strength
 
 
 ## Push of a rim or base lattice point. Matches get_band_push at the ends, then clamps.
+## Rims only recede and bases only flare, so a rim never hangs over its base.
 static func get_edge_push(position: Vector3, is_rim: bool, is_base: bool, strength: float, settings: HexCliffSettings, noise: HexCliffNoise) -> float:
 	var push: float = noise.get_relief(position) * settings.relief_amplitude * settings.edge_relief_scale
 	if is_rim:
 		push -= settings.lip_depth
 	if is_base:
 		push += settings.foot_depth
-	return clampf(push * strength, -settings.edge_max_push, settings.edge_max_push)
+	var low: float = -settings.edge_max_push if is_rim else 0.0
+	var high: float = settings.edge_max_push if is_base else 0.0
+	return clampf(push * strength, low, high)
+
+
+## Adjusts band pushes so no band sits further out than the one below it,
+## or further in than the rim above it. Removes overhangs and undercuts.
+## outward: each band's rest distance along the push direction, ordered bottom to top.
+## base_outward, rim_outward: final distances of the edge's bottom and top points.
+static func remove_overhangs(outward: PackedFloat32Array, pushes: PackedFloat32Array, base_outward: float, rim_outward: float) -> void:
+	var limit: float = base_outward
+	for i: int in pushes.size():
+		var out: float = outward[i] + pushes[i]
+		if out > limit:
+			pushes[i] -= out - limit
+			out = limit
+		limit = out
+	var minimum: float = rim_outward
+	for i: int in range(pushes.size() - 1, -1, -1):
+		var out: float = outward[i] + pushes[i]
+		if out < minimum:
+			pushes[i] += minimum - out
+			out = minimum
+		minimum = out

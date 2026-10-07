@@ -16,6 +16,12 @@ extends Resource
 ## Noise frequency of the border bend. Higher = more wiggles per edge.
 @export_range(0.1, 5.0, 0.05) var border_warp_frequency: float = 1.5
 
+@export_group("Cliffs")
+## Cliff shading from smooth (0) to flat per face (1). Higher = crisper facets.
+@export_range(0.0, 1.0, 0.01) var cliff_faceting: float = 1.0
+
 @export_group("Grid")
 @export var grid_color := Color(0.05, 0.05, 0.05, 0.45)
 @export_range(0.5, 8.0, 0.25) var grid_width_pixels: float = 1.5
+## Height of grid lines above the terrain, in world units.
+@export_range(0.0, 0.2, 0.005) var grid_lift: float = 0.02
