@@ -22,6 +22,7 @@ static func apply_style(material: ShaderMaterial, style: HexTerrainStyle) -> voi
 	material.set_shader_parameter("border_blend", style.border_blend)
 	material.set_shader_parameter("border_warp", style.border_warp)
 	material.set_shader_parameter("border_warp_frequency", style.border_warp_frequency)
+	material.set_shader_parameter("cliff_faceting", style.cliff_faceting)
 	material.set_shader_parameter("grid_color", style.grid_color)
 	material.set_shader_parameter("grid_width_pixels", style.grid_width_pixels)
 

@@ -226,14 +226,30 @@ func _build_chain(edge: Vector3i) -> Array[Vector4i]:
 		var heights: PackedFloat32Array = HexCliffBands.get_heights(bottom, top, (start + finish) * 0.5, _cliff, _noise)
 		var direction: Vector2 = _get_edge_direction(edge)
 		var strength: float = HexCliffDisplacement.get_strength(top - bottom, _settings.elevation_step)
-		for n: int in heights.size():
+		var count: int = heights.size()
+		var rests := PackedVector3Array()
+		var pushes := PackedFloat32Array()
+		var outward := PackedFloat32Array()
+		# Bottom to top.
+		for i: int in count:
+			var rest: Vector3 = start.lerp(finish, (heights[i] - start.y) / (finish.y - start.y))
+			rests.append(rest)
+			pushes.append(HexCliffDisplacement.get_band_push(rest, bottom, top, strength, _cliff, _noise))
+			outward.append(Vector2(rest.x, rest.z).dot(direction))
+		var lower: Vector3 = get_position(get_lattice_key(origin if start.y < finish.y else end))
+		var upper: Vector3 = get_position(get_lattice_key(end if start.y < finish.y else origin))
+		HexCliffDisplacement.remove_overhangs(
+			outward,
+			pushes,
+			Vector2(lower.x, lower.z).dot(direction),
+			Vector2(upper.x, upper.z).dot(direction),
+		)
+		for n: int in count:
 			# Keys count up from the bottom; the chain runs origin to end.
-			var index: int = n if start.y < finish.y else heights.size() - 1 - n
-			var rest: Vector3 = start.lerp(finish, (heights[index] - start.y) / (finish.y - start.y))
+			var index: int = n if start.y < finish.y else count - 1 - n
 			var key := Vector4i(origin.x, origin.y, edge.z, index)
-			var push: float = HexCliffDisplacement.get_band_push(rest, bottom, top, strength, _cliff, _noise)
-			_rest[key] = rest
-			_positions[key] = rest + Vector3(direction.x, 0.0, direction.y) * push
+			_rest[key] = rests[index]
+			_positions[key] = rests[index] + Vector3(direction.x, 0.0, direction.y) * pushes[index]
 			chain.append(key)
 	chain.append(get_lattice_key(end))
 	return chain

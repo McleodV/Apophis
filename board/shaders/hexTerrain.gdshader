@@ -29,6 +29,9 @@ uniform float border_blend = 0.08;
 uniform float border_warp = 0.15;
 uniform float border_warp_frequency = 1.5;
 
+// Cliff shading from smooth (0) to flat per face (1).
+uniform float cliff_faceting = 1.0;
+
 uniform bool grid_visible = true;
 uniform vec4 grid_color : source_color = vec4(0.05, 0.05, 0.05, 0.45);
 uniform float grid_width_pixels = 1.5;
@@ -174,6 +177,11 @@ void fragment() {
 	// Derivatives first; they need uniform control flow.
 	vec2 dpdx = dFdx(v_rest);
 	vec2 dpdy = dFdy(v_rest);
+	// Flat face normal in view space, turned toward the camera.
+	vec3 face_normal = normalize(cross(dFdx(VERTEX), dFdy(VERTEX)));
+	if (dot(face_normal, VERTEX) > 0.0) {
+		face_normal = -face_normal;
+	}
 	bool is_cliff = v_cliff > 0.5;
 
 	vec2 point = v_rest;
@@ -229,6 +237,7 @@ void fragment() {
 
 	if (is_cliff) {
 		color = cliff_color.rgb;
+		NORMAL = normalize(mix(NORMAL, face_normal, cliff_faceting));
 	} else if (grid_visible) {
 		// Edge distance in screen pixels, measured across the edge.
 		vec2 edge_normal = HEX_NEIGHBOR_DIRS[edge];

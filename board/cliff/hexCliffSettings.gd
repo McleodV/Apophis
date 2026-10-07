@@ -30,7 +30,7 @@ extends Resource
 @export_range(0.1, 20.0, 0.1) var relief_frequency: float = 3.0
 ## Vertical noise scale. Below 1 stretches ridges vertically.
 @export_range(0.05, 1.0, 0.01) var relief_vertical_scale: float = 0.25
-@export_range(1, 6) var relief_octaves: int = 3
+@export_range(1, 6) var relief_octaves: int = 1
 @export var noise_seed: int = 0
 
 @export_group("Rim and Base")
