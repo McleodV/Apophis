@@ -15,7 +15,6 @@ static func create() -> ShaderMaterial:
 static func apply_settings(material: ShaderMaterial, settings: HexTerrainSettings) -> void:
 	material.set_shader_parameter("outer_radius", HexMath.OUTER_RADIUS)
 	material.set_shader_parameter("blend_band", settings.blend_band)
-	material.set_shader_parameter("cliff_normal_y", HexChunkMeshBuilder.CLIFF_NORMAL_Y)
 
 
 static func apply_style(material: ShaderMaterial, style: HexTerrainStyle) -> void:
