@@ -13,7 +13,6 @@ uniform sampler2D tile_data : filter_nearest, repeat_disable;
 uniform int map_radius = 0;
 uniform float outer_radius = 1.0;
 uniform float blend_band = 0.4;
-uniform float cliff_normal_y = 0.6;
 
 uniform vec4 base_color : source_color = vec4(0.55, 0.56, 0.42, 1.0);
 uniform vec4 cliff_color : source_color = vec4(0.42, 0.4, 0.37, 1.0);
@@ -34,7 +33,10 @@ uniform bool grid_visible = true;
 uniform vec4 grid_color : source_color = vec4(0.05, 0.05, 0.05, 0.45);
 uniform float grid_width_pixels = 1.5;
 
-varying vec3 v_position;
+// Undisplaced xz from the mesh UV. Cliff displacement doesn't move tile colors or the grid.
+varying vec2 v_rest;
+// 1 on cliff faces, from vertex color red. Constant per face.
+varying float v_cliff;
 
 
 bool has_tile(ivec2 axial) {
@@ -163,18 +165,18 @@ vec2 get_border_warp(vec2 point) {
 
 
 void vertex() {
-	v_position = VERTEX;
+	v_rest = UV;
+	v_cliff = COLOR.r;
 }
 
 
 void fragment() {
 	// Derivatives first; they need uniform control flow.
-	vec3 face = cross(dFdx(v_position), dFdy(v_position));
-	vec2 dpdx = dFdx(v_position.xz);
-	vec2 dpdy = dFdy(v_position.xz);
-	bool is_cliff = abs(normalize(face).y) < cliff_normal_y;
+	vec2 dpdx = dFdx(v_rest);
+	vec2 dpdy = dFdy(v_rest);
+	bool is_cliff = v_cliff > 0.5;
 
-	vec2 point = v_position.xz;
+	vec2 point = v_rest;
 	ivec2 owner = hex_world_to_axial(point, outer_radius);
 	vec2 offset = point - hex_axial_to_world(owner, outer_radius);
 	float inner_radius = outer_radius * HEX_SQRT3 * 0.5;
