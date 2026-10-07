@@ -32,11 +32,7 @@ uniform float border_warp_frequency = 1.5;
 // Cliff shading from smooth (0) to flat per face (1).
 uniform float cliff_faceting = 1.0;
 
-uniform bool grid_visible = true;
-uniform vec4 grid_color : source_color = vec4(0.05, 0.05, 0.05, 0.45);
-uniform float grid_width_pixels = 1.5;
-
-// Undisplaced xz from the mesh UV. Cliff displacement doesn't move tile colors or the grid.
+// Undisplaced xz from the mesh UV. Cliff displacement doesn't move tile colors.
 varying vec2 v_rest;
 // 1 on cliff faces, from vertex color red. Constant per face.
 varying float v_cliff;
@@ -175,8 +171,6 @@ void vertex() {
 
 void fragment() {
 	// Derivatives first; they need uniform control flow.
-	vec2 dpdx = dFdx(v_rest);
-	vec2 dpdy = dFdy(v_rest);
 	// Flat face normal in view space, turned toward the camera.
 	vec3 face_normal = normalize(cross(dFdx(VERTEX), dFdy(VERTEX)));
 	if (dot(face_normal, VERTEX) > 0.0) {
@@ -191,26 +185,18 @@ void fragment() {
 	bool on_owner = has_tile(owner);
 	ivec4 own = on_owner ? read_tile(owner) : ivec4(0);
 
-	// Nearest corner (for blending) and nearest edge (for the grid).
+	// Nearest corner, for blending.
 	int corner = 0;
-	int edge = 0;
 	float corner_dot = -1e9;
-	float edge_dot = -1e9;
 	for (int i = 0; i < 6; i++) {
 		float c = dot(offset, HEX_CORNER_DIRS[i]);
 		if (c > corner_dot) {
 			corner_dot = c;
 			corner = i;
 		}
-		float e = dot(offset, HEX_NEIGHBOR_DIRS[i]);
-		if (e > edge_dot) {
-			edge_dot = e;
-			edge = i;
-		}
 	}
-	float edge_distance = inner_radius - edge_dot;
 
-	// The two neighbors nearest this point. The nearest edge always borders one of them.
+	// The two neighbors nearest this point.
 	int next = (corner + 1) % 6;
 	ivec2 axial_a = owner + HEX_DIRECTIONS[corner];
 	ivec2 axial_b = owner + HEX_DIRECTIONS[next];
@@ -238,19 +224,6 @@ void fragment() {
 	if (is_cliff) {
 		color = cliff_color.rgb;
 		NORMAL = normalize(mix(NORMAL, face_normal, cliff_faceting));
-	} else if (grid_visible) {
-		// Edge distance in screen pixels, measured across the edge.
-		vec2 edge_normal = HEX_NEIGHBOR_DIRS[edge];
-		float pixel_size = max(length(vec2(dot(dpdx, edge_normal), dot(dpdy, edge_normal))), 1e-6);
-		float pixels = edge_distance / pixel_size;
-		// Shared edges are split between both tiles. Cliff and map edges draw the full width here.
-		float half_width = grid_width_pixels * 0.5;
-		bool edge_shared = edge == corner ? shares_a : shares_b;
-		if (!edge_shared) {
-			half_width = grid_width_pixels;
-		}
-		float line = clamp(half_width - pixels + 0.5, 0.0, 1.0);
-		color = mix(color, grid_color.rgb, grid_color.a * line);
 	}
 
 	ALBEDO = color;

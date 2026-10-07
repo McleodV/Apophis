@@ -23,3 +23,5 @@ extends Resource
 @export_group("Grid")
 @export var grid_color := Color(0.05, 0.05, 0.05, 0.45)
 @export_range(0.5, 8.0, 0.25) var grid_width_pixels: float = 1.5
+## Height of grid lines above the terrain, in world units.
+@export_range(0.0, 0.2, 0.005) var grid_lift: float = 0.02

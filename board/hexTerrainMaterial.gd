@@ -23,8 +23,6 @@ static func apply_style(material: ShaderMaterial, style: HexTerrainStyle) -> voi
 	material.set_shader_parameter("border_warp", style.border_warp)
 	material.set_shader_parameter("border_warp_frequency", style.border_warp_frequency)
 	material.set_shader_parameter("cliff_faceting", style.cliff_faceting)
-	material.set_shader_parameter("grid_color", style.grid_color)
-	material.set_shader_parameter("grid_width_pixels", style.grid_width_pixels)
 
 
 ## Tile texture, map size, and biome palette. A missing biome or palette uses palette defaults.
@@ -38,10 +36,6 @@ static func apply_map(material: ShaderMaterial, data: HexMapData, tile_texture: 
 	material.set_shader_parameter("trade_color", palette.trade_color)
 	material.set_shader_parameter("industry_color", palette.industry_color)
 	material.set_shader_parameter("phenomena_color", palette.phenomena_color)
-
-
-static func set_grid_visible(material: ShaderMaterial, visible: bool) -> void:
-	material.set_shader_parameter("grid_visible", visible)
 
 
 # One entry per dominant value (1 to MAX_TILE_TOTAL). Missing entries become 0.

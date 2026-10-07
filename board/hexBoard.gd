@@ -1,6 +1,6 @@
 class_name HexBoard
 extends Node3D
-## Renders a HexMapData as chunked terrain.
+## Renders a HexMapData as chunked terrain with grid lines.
 ## Rebuilds only chunks affected by elevation changes, once per frame.
 
 ## Leave empty to use defaults.
@@ -10,12 +10,13 @@ extends Node3D
 @export var grid_visible: bool = true:
 	set(value):
 		grid_visible = value
-		if _material:
-			HexTerrainMaterial.set_grid_visible(_material, value)
+		for chunk: HexChunk in _chunks.values():
+			chunk.grid.visible = value
 
 var map_data: HexMapData
 
 var _material: ShaderMaterial
+var _grid_material: ShaderMaterial
 var _tile_texture: HexTileTexture
 var _chunks: Dictionary = {} # Chunk key -> HexChunk
 var _dirty_chunks: Dictionary = {} # Chunk key -> true
@@ -75,12 +76,14 @@ func _ensure_defaults() -> void:
 		style = HexTerrainStyle.new()
 	if _material == null:
 		_material = HexTerrainMaterial.create()
+	if _grid_material == null:
+		_grid_material = HexGridMaterial.create()
 
 
 func _apply_material() -> void:
 	HexTerrainMaterial.apply_settings(_material, settings)
 	HexTerrainMaterial.apply_style(_material, style)
-	HexTerrainMaterial.set_grid_visible(_material, grid_visible)
+	HexGridMaterial.apply_style(_grid_material, style)
 	if map_data:
 		HexTerrainMaterial.apply_map(_material, map_data, _tile_texture.texture)
 
@@ -91,6 +94,8 @@ func _get_or_create_chunk(key: Vector2i) -> HexChunk:
 	var chunk := HexChunk.new()
 	chunk.name = "Chunk_%d_%d" % [key.x, key.y]
 	chunk.material_override = _material
+	chunk.grid.material_override = _grid_material
+	chunk.grid.visible = grid_visible
 	add_child(chunk)
 	_chunks[key] = chunk
 	return chunk
