@@ -9,7 +9,7 @@ extends Object
 
 # Repairs aim this far past level, as out per unit height, so float noise can't tip a face over.
 const _TARGET: float = 0.004
-const _MAX_SWEEPS: int = 60
+const _MAX_SWEEPS: int = 200
 # Faces seen this nearly edge-on from outside count as folded.
 const _MIN_FACING: float = 0.001
 

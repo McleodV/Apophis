@@ -20,6 +20,11 @@ var is_fixed: bool = false
 var depth: float = 0.0
 ## Max sideways shift of its corners, in lattice steps. Keeps neighboring columns from crossing.
 var room: float = 0.0
+## Side of the neighbor it merges into partway down: -1 = previous, 1 = next, 0 = none (runs to the base).
+## A merging column ends on one of that neighbor's corners; its bottom is the neighbor's.
+var merge_side: int = 0
+## Height where it merges, as a share of the wall's height above the base.
+var merge_height: float = 0.0
 
 
 ## Column on crossing edge k, which joins rim (k + 1) / 2 to base k / 2.
