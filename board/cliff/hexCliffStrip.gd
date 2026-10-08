@@ -1,24 +1,25 @@
 class_name HexCliffStrip
 extends RefCounted
-## The cliff face along one hex side, rebuilt as a few large flat facets.
+## The cliff face along one hex side, rebuilt as many flat facets.
 ## A strip is the row of lattice triangles between a low tile's edge and the next lattice row in.
 ## Only its rim points (on the hex edge), base points (one row in), and the spoke edges at its two
 ## corners are shared with other terrain, so its inside can be triangulated freely.
 ## Crossing edge k joins the rim to the base, numbered along the side; 0 and the last are the spokes.
-## Some crossing edges are facet columns. Neighboring columns are joined into large triangles, and
-## rim and base points between column ends sit on the straight line between them, so facets stay flush.
-## Inner columns alternate between ridges, pushed out, and grooves, pushed in, so the facets between
-## them alternate facing left and right. Ridges also push their rim and base points out.
+## Facet columns run from rim to base (see HexCliffColumnLayout). Neighboring columns are joined into
+## triangles, and rim and base points between column ends sit on the straight line between them,
+## so facets stay flush. Columns other than spokes hold the strip's own corners (HexCliffColumnShape).
+## Faces are assembled by HexCliffStripFaces. No face leans out going up at any spot along the wall.
 
 ## Returned by find_for_triangle() for a triangle outside every strip.
 const NONE := Vector3i(0, 0, -1)
 ## Returned by find_for_point() for a point inside no strip's rim or base.
 const NO_POINT := Vector4i(0, 0, -1, 0)
+## Vertex key z of a strip's own corners, plus its side: Vector4i(tile.x, tile.y, CORNER_Z + side, index).
+const CORNER_Z: int = 8
 
-# Hash seed offset for column picks.
-const _COLUMN_SEED: int = 7177
-# _has_overhang(): downward normal.y below this counts. Ignores float noise on upright faces.
-const _OVERHANG_TOLERANCE: float = 0.003
+# get_triangle(): shape scales tried in turn (see HexCliffStripFaces.build()). A face that can't be
+# kept upright calms the shape; at 0 columns run straight from rim to base, which never leans out.
+const _SCALES: Array[float] = [1.0, 0.5, 0.0]
 
 ## (tile.x, tile.y, side). The strip lies in tile, facing its higher neighbor across side.
 var id: Vector3i
@@ -26,21 +27,25 @@ var id: Vector3i
 var rim: Array[Vector2i] = []
 ## Lattice points one row in, in the same order.
 var base: Array[Vector2i] = []
-## Crossing edges that are facet columns, ascending. Always includes both spokes.
-var columns := PackedInt32Array()
-## Per column: signed depth. Positive = ridge, negative = groove, 0 = spoke or forced column.
-var depths := PackedFloat32Array()
+## Facet columns, ordered along the side. The first and last are the spokes.
+var columns: Array[HexCliffColumn] = []
 
-var _subdivisions: int = 0
+## Horizontal direction the face looks.
+var outward := Vector3.ZERO
+
 var _max_push: float = 0.0 # Limit of rim and base pushes
-var _outward := Vector3.ZERO # Horizontal direction the face looks
+var _settings: HexCliffSettings
+var _noise: HexCliffNoise
 var _triangle: HexTerrainSurface.Triangle
+var _corner_positions := PackedVector3Array() # By corner index
+var _corner_rests := PackedVector3Array()
 
 
-func _init(tile: Vector2i, side: int, subdivisions: int, settings: HexCliffSettings, max_push: float, surface: HexTerrainSurface) -> void:
+func _init(tile: Vector2i, side: int, subdivisions: int, settings: HexCliffSettings, noise: HexCliffNoise, max_push: float, surface: HexTerrainSurface) -> void:
 	id = Vector3i(tile.x, tile.y, side)
-	_subdivisions = subdivisions
 	_max_push = max_push
+	_settings = settings
+	_noise = noise
 	var center: Vector2i = HexLattice.hex_center(tile, subdivisions)
 	var u: Vector2i = HexLattice.CORNERS[posmod(side - 1, 6)]
 	var w: Vector2i = HexLattice.CORNERS[side]
@@ -48,44 +53,36 @@ func _init(tile: Vector2i, side: int, subdivisions: int, settings: HexCliffSetti
 		rim.append(center + u * (subdivisions - b) + w * b)
 	for b: int in subdivisions:
 		base.append(center + u * (subdivisions - 1 - b) + w * b)
-	var last: int = 2 * subdivisions - 1
-	var picks: Dictionary = {0: 0.0, last: 0.0} # Crossing edge -> signed depth
 	# A rim or base segment that is itself a cliff edge carries shared bands, so it can't lie inside
 	# a facet's straight side. Columns at both of its ends make it a side of its own.
+	var forced: Dictionary = {} # Crossing edge -> true
 	for b: int in subdivisions:
 		if surface.has_bands(rim[b], rim[b + 1]):
-			picks[2 * b] = 0.0
-			picks[2 * b + 1] = 0.0
+			forced[2 * b] = true
+			forced[2 * b + 1] = true
 	for b: int in subdivisions - 1:
 		if surface.has_bands(base[b], base[b + 1]):
-			picks[2 * b + 1] = 0.0
-			picks[2 * b + 2] = 0.0
-	# Inner columns at random gaps, alternating ridge and groove.
-	# Each crossing edge is half a lattice step further along the side.
-	var mean_gap: float = settings.column_width / (0.5 * HexLattice.get_spacing(subdivisions))
-	var seed_value: int = settings.noise_seed + _COLUMN_SEED
-	var role: float = 1.0 if HexCliffNoise.hash01(tile.x, tile.y, side, seed_value) < 0.5 else -1.0
-	var k: int = 0
-	var n: int = 0
-	while true:
-		n += 1
-		var spread: float = 2.0 * HexCliffNoise.hash01(tile.x, tile.y, side * 64 + n, seed_value + 1) - 1.0
-		# Gaps of 1 crossing edge make sliver facets, so columns are at least a lattice step apart.
-		# That also keeps them off a spoke's neighbor: spokes are pushed along the corner's own
-		# direction, so they may lean sideways and cross a column sharing their bottom.
-		k += maxi(2, roundi(mean_gap * (1.0 + settings.column_width_variance * spread)))
-		if k >= last - 1:
-			break
-		if not picks.has(k):
-			picks[k] = role * settings.column_depth
-		role = -role
-	var sorted: Array = picks.keys()
+			forced[2 * b + 1] = true
+			forced[2 * b + 2] = true
+	var sorted: Array = forced.keys()
 	sorted.sort()
-	for column: int in sorted:
-		columns.append(column)
-		depths.append(picks[column])
-	_outward = HexMath.axial_to_world(tile) - HexMath.axial_to_world(HexMath.neighbor(tile, side))
-	_outward = _outward.normalized()
+	columns = HexCliffColumnLayout.pick(tile, side, subdivisions, settings, PackedInt32Array(sorted))
+	outward = HexMath.axial_to_world(tile) - HexMath.axial_to_world(HexMath.neighbor(tile, side))
+	outward = outward.normalized()
+
+
+## Key of the strip's own corner index.
+static func get_corner_key(strip_id: Vector3i, index: int) -> Vector4i:
+	return Vector4i(strip_id.x, strip_id.y, CORNER_Z + strip_id.z, index)
+
+
+static func is_corner_key(key: Vector4i) -> bool:
+	return key.z >= CORNER_Z
+
+
+## Strip id of a corner key.
+static func get_corner_strip(key: Vector4i) -> Vector3i:
+	return Vector3i(key.x, key.y, key.z - CORNER_Z)
 
 
 ## True if tile has a cliff face along side: the neighbor there is at least 2 levels higher.
@@ -159,10 +156,10 @@ func get_point_position(is_base: bool, index: int, surface: HexTerrainSurface) -
 	var right: int = -1
 	var depth: float = 0.0
 	var ends: int = 0
-	for c: int in columns.size():
-		var end: int = get_bottom_index(columns[c]) if is_base else get_top_index(columns[c])
+	for column: HexCliffColumn in columns:
+		var end: int = column.bottom if is_base else column.top
 		if end == index:
-			depth += depths[c]
+			depth += column.depth
 			ends += 1
 		elif end < index:
 			left = end
@@ -170,75 +167,33 @@ func get_point_position(is_base: bool, index: int, surface: HexTerrainSurface) -
 			right = end
 	if ends > 0:
 		var push: float = clampf(depth / ends, 0.0, _max_push)
-		return surface.get_rest_position(HexTerrainSurface.get_lattice_key(row[index])) + _outward * push
+		return surface.get_rest_position(HexTerrainSurface.get_lattice_key(row[index])) + outward * push
 	var start: Vector3 = surface.get_position(HexTerrainSurface.get_lattice_key(row[left]))
 	var finish: Vector3 = surface.get_position(HexTerrainSurface.get_lattice_key(row[right]))
 	return start.lerp(finish, float(index - left) / (right - left))
 
 
 ## The strip's faces. Built once.
-## Column wander can rarely tip a face down; then the columns are rebuilt straight.
 func get_triangle(surface: HexTerrainSurface) -> HexTerrainSurface.Triangle:
 	if _triangle:
 		return _triangle
-	var triangle: HexTerrainSurface.Triangle = _build_triangle(surface, 1.0)
-	if _has_overhang(triangle, surface):
-		triangle = _build_triangle(surface, 0.0)
-	_triangle = triangle
+	for scale: float in _SCALES:
+		_triangle = HexCliffStripFaces.build(self, surface, _settings, _noise, scale, _corner_positions, _corner_rests)
+		if _triangle:
+			break
 	return _triangle
 
 
-# wander: scale of the inner columns' sideways wander.
-func _build_triangle(surface: HexTerrainSurface, wander: float) -> HexTerrainSurface.Triangle:
-	var keys: Array[Vector4i] = []
-	var rest := PackedVector3Array()
-	var local: Dictionary = {} # Vertex key -> local index
-	var chains: Array[PackedInt32Array] = []
-	var between: Dictionary = {} # Vector2i(facet corner, next facet corner) -> points between them
-	var last: int = 2 * _subdivisions - 1
-	for c: int in columns.size():
-		var k: int = columns[c]
-		var top: Vector2i = rim[get_top_index(k)]
-		var bottom: Vector2i = base[get_bottom_index(k)]
-		# Spokes are shared, so they keep every band. Inner columns hold only facet corners.
-		var vertices: Array[Vector4i]
-		if k == 0 or k == last:
-			vertices = surface.get_chain(top, bottom)
-		else:
-			vertices = surface.get_column(top, bottom, depths[c], wander)
-		var chain := PackedInt32Array()
-		var pending := PackedInt32Array()
-		for vertex: Vector4i in vertices:
-			var index: int = _get_local(vertex, surface, keys, rest, local)
-			if HexTerrainSurface.is_lattice_key(vertex) or surface.is_crease_key(vertex):
-				if not pending.is_empty():
-					between[Vector2i(chain[chain.size() - 1], index)] = pending
-					pending = PackedInt32Array()
-				chain.append(index)
-			else:
-				pending.append(index)
-		chains.append(chain)
-	for c: int in columns.size() - 1:
-		_add_between(rim, get_top_index(columns[c]), get_top_index(columns[c + 1]), surface, keys, rest, local, between)
-		_add_between(base, get_bottom_index(columns[c]), get_bottom_index(columns[c + 1]), surface, keys, rest, local, between)
-	var positions := PackedVector3Array()
-	for key: Vector4i in keys:
-		positions.append(surface.get_position(key))
-	var triangle := HexTerrainSurface.Triangle.new()
-	triangle.is_cliff = true
-	for index: int in HexCliffStitcher.stitch_columns(chains, between, rest, positions, _outward):
-		triangle.keys.append(keys[index])
-	return triangle
+## Final position of the strip's own corner index.
+func get_corner_position(index: int, surface: HexTerrainSurface) -> Vector3:
+	get_triangle(surface)
+	return _corner_positions[index]
 
 
-# True if any face looks down.
-static func _has_overhang(triangle: HexTerrainSurface.Triangle, surface: HexTerrainSurface) -> bool:
-	for i: int in range(0, triangle.keys.size(), 3):
-		var a: Vector3 = surface.get_position(triangle.keys[i])
-		var normal: Vector3 = (surface.get_position(triangle.keys[i + 2]) - a).cross(surface.get_position(triangle.keys[i + 1]) - a)
-		if normal.y < -_OVERHANG_TOLERANCE * normal.length():
-			return true
-	return false
+## Position of the strip's own corner index before displacement: on its column's rest line.
+func get_corner_rest(index: int, surface: HexTerrainSurface) -> Vector3:
+	get_triangle(surface)
+	return _corner_rests[index]
 
 
 # Row of a lattice point in a tile's sector toward side, or -1 if it's outside that sector.
@@ -258,31 +213,3 @@ static func _get_sector_coords(tile: Vector2i, side: int, point: Vector2i, subdi
 		(offset.x * w.y - offset.y * w.x) * determinant,
 		(u.x * offset.y - u.y * offset.x) * determinant,
 	)
-
-
-# Points strictly between two column ends along the rim or base, listed under the pair of ends.
-# Between neighboring points that's the bands of the segment joining them, if it has any.
-static func _add_between(row: Array[Vector2i], from: int, to: int, surface: HexTerrainSurface, keys: Array[Vector4i], rest: PackedVector3Array, local: Dictionary, between: Dictionary) -> void:
-	var points := PackedInt32Array()
-	if to - from == 1:
-		var chain: Array[Vector4i] = surface.get_chain(row[from], row[to])
-		for i: int in range(1, chain.size() - 1):
-			points.append(_get_local(chain[i], surface, keys, rest, local))
-	else:
-		for i: int in range(from + 1, to):
-			points.append(_get_local(HexTerrainSurface.get_lattice_key(row[i]), surface, keys, rest, local))
-	if points.is_empty():
-		return
-	var start: int = _get_local(HexTerrainSurface.get_lattice_key(row[from]), surface, keys, rest, local)
-	var end: int = _get_local(HexTerrainSurface.get_lattice_key(row[to]), surface, keys, rest, local)
-	between[Vector2i(start, end)] = points
-
-
-static func _get_local(key: Vector4i, surface: HexTerrainSurface, keys: Array[Vector4i], rest: PackedVector3Array, local: Dictionary) -> int:
-	var index: Variant = local.get(key)
-	if index != null:
-		return index
-	local[key] = keys.size()
-	keys.append(key)
-	rest.append(surface.get_rest_position(key))
-	return keys.size() - 1

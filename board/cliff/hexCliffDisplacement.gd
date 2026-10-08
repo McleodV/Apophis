@@ -8,10 +8,6 @@ const _FADE_START: float = 0.25
 const _FADE_RANGE: float = 0.25
 # A push barely moving a corner along a face's direction can't fix that face.
 const _MIN_RATE: float = 0.01
-# Hash seed offset for get_column_push().
-const _DEPTH_SEED: int = 4813
-# get_column_wander(): share of a column's height at each end over which wander fades in.
-const _WANDER_FADE: float = 0.3
 # remove_overhangs(): horizontal lean back per unit of height, when there is room for it.
 const _MIN_LEAN: float = 0.05
 
@@ -31,21 +27,6 @@ static func get_strength(height_difference: float, elevation_step: float) -> flo
 ## Push of a facet corner.
 static func get_crease_push(position: Vector3, strength: float, settings: HexCliffSettings, noise: HexCliffNoise) -> float:
 	return noise.get_relief(position) * settings.relief_amplitude * strength
-
-
-## Share of a column's depth one facet corner gets, so ridges and grooves step in and out with height.
-static func get_column_push(edge: Vector3i, index: int, depth: float, settings: HexCliffSettings) -> float:
-	var jitter: float = settings.column_depth_jitter * HexCliffNoise.hash01(edge.x, edge.y, edge.z * 1024 + index, settings.noise_seed + _DEPTH_SEED)
-	return depth * (1.0 - jitter)
-
-
-## Sideways shift of a column's facet corner at position, so column edges bend instead of running
-## dead straight. Smooth with height, so neighboring corners shift alike and faces don't fold.
-## Fades out near the rim and base, whose points stay put: t is the corner's height up the column, 0 to 1.
-## spacing: lattice step. Shifts stay under a third of it, so neighboring columns never cross.
-static func get_column_wander(position: Vector3, t: float, spacing: float, settings: HexCliffSettings, noise: HexCliffNoise) -> float:
-	var fade: float = clampf(minf(t, 1.0 - t) / _WANDER_FADE, 0.0, 1.0)
-	return clampf(noise.get_wander(position), -1.0, 1.0) * minf(settings.column_wander, spacing / 3.0) * fade
 
 
 ## Push of a rim or base lattice point outside a strip's column ends, from 0 to max_push.
