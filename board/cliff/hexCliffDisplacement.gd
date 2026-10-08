@@ -16,21 +16,15 @@ static func get_strength(height_difference: float, elevation_step: float) -> flo
 	return smoothstep(HexCliffBands.CLIFF_LEVELS, HexCliffBands.CLIFF_LEVELS + 0.5, levels)
 
 
-## Push of a band vertex on an edge spanning bottom to top.
-static func get_band_push(position: Vector3, bottom: float, top: float, strength: float, settings: HexCliffSettings, noise: HexCliffNoise) -> float:
-	var lip: float = 1.0 - smoothstep(0.0, settings.lip_height, top - position.y)
-	var foot: float = 1.0 - smoothstep(0.0, settings.foot_height, position.y - bottom)
-	# Relief eases to the rim and base amount near the ends.
-	var relief_scale: float = lerpf(settings.edge_relief_scale, 1.0, minf(1.0 - lip, 1.0 - foot))
-	var push: float = foot * settings.foot_depth - lip * settings.lip_depth
-	push += noise.get_relief(position) * settings.relief_amplitude * relief_scale
-	return push * strength
+## Push of a crease vertex on a wall facing direction.
+static func get_crease_push(position: Vector3, direction: Vector2, strength: float, settings: HexCliffSettings, noise: HexCliffNoise) -> float:
+	return noise.get_crests(position, direction) * settings.relief_amplitude * strength
 
 
-## Push of a rim or base lattice point. Matches get_band_push at the ends, then clamps.
+## Push of a rim or base lattice point on a wall facing direction, clamped.
 ## Rims only recede and bases only flare, so a rim never hangs over its base.
-static func get_edge_push(position: Vector3, is_rim: bool, is_base: bool, strength: float, settings: HexCliffSettings, noise: HexCliffNoise) -> float:
-	var push: float = noise.get_relief(position) * settings.relief_amplitude * settings.edge_relief_scale
+static func get_edge_push(position: Vector3, direction: Vector2, is_rim: bool, is_base: bool, strength: float, settings: HexCliffSettings, noise: HexCliffNoise) -> float:
+	var push: float = noise.get_crests(position, direction) * settings.relief_amplitude * settings.edge_relief_scale
 	if is_rim:
 		push -= settings.lip_depth
 	if is_base:
@@ -40,9 +34,9 @@ static func get_edge_push(position: Vector3, is_rim: bool, is_base: bool, streng
 	return clampf(push * strength, low, high)
 
 
-## Adjusts band pushes so no band sits further out than the one below it,
+## Adjusts crease pushes so no crease sits further out than the one below it,
 ## or further in than the rim above it. Removes overhangs and undercuts.
-## outward: each band's rest distance along the push direction, ordered bottom to top.
+## outward: each crease's rest distance along the push direction, ordered bottom to top.
 ## base_outward, rim_outward: final distances of the edge's bottom and top points.
 static func remove_overhangs(outward: PackedFloat32Array, pushes: PackedFloat32Array, base_outward: float, rim_outward: float) -> void:
 	var limit: float = base_outward

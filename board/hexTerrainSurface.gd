@@ -29,6 +29,7 @@ var _steep_limit: float = 0.0 # See get_flags()
 var _heights: Dictionary = {} # Lattice point -> undisplaced height
 var _rest: Dictionary = {} # Band key -> undisplaced position
 var _positions: Dictionary = {} # Vertex key -> final position
+var _creases: Dictionary = {} # Band key -> true, for bands with their own push
 var _cliff_edges: Dictionary = {} # Edge key -> bool
 var _chains: Dictionary = {} # Edge key -> Array[Vector4i], origin to end
 var _triangles: Dictionary = {} # Triangle key -> Triangle
@@ -184,6 +185,7 @@ func _build_triangle(key: Vector3i) -> Triangle:
 	# Local indices for the stitcher.
 	var keys: Array[Vector4i] = []
 	var rest := PackedVector3Array()
+	var is_crease := PackedByteArray() # Corners count as creases.
 	var local: Dictionary = {} # Vertex key -> local index
 	var chains: Array[PackedInt32Array] = []
 	for i: int in 3:
@@ -193,9 +195,10 @@ func _build_triangle(key: Vector3i) -> Triangle:
 				local[vertex] = keys.size()
 				keys.append(vertex)
 				rest.append(get_rest_position(vertex))
+				is_crease.append(1 if vertex.z == _LATTICE or _creases.has(vertex) else 0)
 			indices.append(local[vertex])
 		chains.append(indices)
-	for index: int in HexCliffStitcher.stitch(chains, rest):
+	for index: int in HexCliffStitcher.stitch(chains, rest, is_crease):
 		triangle.keys.append(keys[index])
 	triangle.is_cliff = true
 	return triangle
@@ -228,14 +231,17 @@ func _build_chain(edge: Vector3i) -> Array[Vector4i]:
 		var strength: float = HexCliffDisplacement.get_strength(top - bottom, _settings.elevation_step)
 		var count: int = heights.size()
 		var rests := PackedVector3Array()
+		var crease_bands := PackedInt32Array()
 		var pushes := PackedFloat32Array()
 		var outward := PackedFloat32Array()
-		# Bottom to top.
+		# Bottom to top. Only creases get their own push.
 		for i: int in count:
 			var rest: Vector3 = start.lerp(finish, (heights[i] - start.y) / (finish.y - start.y))
 			rests.append(rest)
-			pushes.append(HexCliffDisplacement.get_band_push(rest, bottom, top, strength, _cliff, _noise))
-			outward.append(Vector2(rest.x, rest.z).dot(direction))
+			if HexCliffBands.is_crease(edge, i, _cliff):
+				crease_bands.append(i)
+				pushes.append(HexCliffDisplacement.get_crease_push(rest, direction, strength, _cliff, _noise))
+				outward.append(Vector2(rest.x, rest.z).dot(direction))
 		var lower: Vector3 = get_position(get_lattice_key(origin if start.y < finish.y else end))
 		var upper: Vector3 = get_position(get_lattice_key(end if start.y < finish.y else origin))
 		HexCliffDisplacement.remove_overhangs(
@@ -244,15 +250,40 @@ func _build_chain(edge: Vector3i) -> Array[Vector4i]:
 			Vector2(lower.x, lower.z).dot(direction),
 			Vector2(upper.x, upper.z).dot(direction),
 		)
+		var finals: PackedVector3Array = _place_bands(rests, crease_bands, pushes, direction, lower, upper)
 		for n: int in count:
 			# Keys count up from the bottom; the chain runs origin to end.
 			var index: int = n if start.y < finish.y else count - 1 - n
 			var key := Vector4i(origin.x, origin.y, edge.z, index)
 			_rest[key] = rests[index]
-			_positions[key] = rests[index] + Vector3(direction.x, 0.0, direction.y) * pushes[index]
+			_positions[key] = finals[index]
 			chain.append(key)
+		for index: int in crease_bands:
+			_creases[Vector4i(origin.x, origin.y, edge.z, index)] = true
 	chain.append(get_lattice_key(end))
 	return chain
+
+
+# Final band positions, bottom to top. Creases are pushed along direction;
+# every other band sits on the straight line between the creases or end points around it.
+static func _place_bands(rests: PackedVector3Array, crease_bands: PackedInt32Array, pushes: PackedFloat32Array, direction: Vector2, lower: Vector3, upper: Vector3) -> PackedVector3Array:
+	var finals := PackedVector3Array()
+	finals.resize(rests.size())
+	var offset := Vector3(direction.x, 0.0, direction.y)
+	var previous_point: Vector3 = lower
+	var previous_band: int = -1
+	for c: int in crease_bands.size() + 1:
+		var is_end: bool = c == crease_bands.size()
+		var next_band: int = rests.size() if is_end else crease_bands[c]
+		var next_point: Vector3 = upper if is_end else rests[next_band] + offset * pushes[c]
+		for i: int in range(previous_band + 1, next_band):
+			var t: float = (rests[i].y - previous_point.y) / (next_point.y - previous_point.y)
+			finals[i] = previous_point.lerp(next_point, t)
+		if not is_end:
+			finals[next_band] = next_point
+		previous_point = next_point
+		previous_band = next_band
+	return finals
 
 
 # Steep edges of on-map triangles. Off-map terrain gets no cliffs.
@@ -333,7 +364,7 @@ func _get_point_position(point: Vector2i) -> Vector3:
 	if direction.length() < 0.0001:
 		return rest
 	direction = direction.normalized()
-	var push: float = HexCliffDisplacement.get_edge_push(rest, is_rim, is_base, strength, _cliff, _noise)
+	var push: float = HexCliffDisplacement.get_edge_push(rest, direction, is_rim, is_base, strength, _cliff, _noise)
 	return rest + Vector3(direction.x, 0.0, direction.y) * push
 
 
