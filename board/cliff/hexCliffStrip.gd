@@ -148,7 +148,7 @@ static func get_bottom_index(k: int) -> int:
 
 
 ## Final position of a rim or base point inside the strip.
-## Column ends push out by their ridge depth; grooves stay put, so rims never pull back.
+## Column ends push out by their depth; negative depths stay put, so rims never pull back.
 ## Points between column ends sit on the straight line between them, so the facet touching them stays flush.
 func get_point_position(is_base: bool, index: int, surface: HexTerrainSurface) -> Vector3:
 	var row: Array[Vector2i] = base if is_base else rim

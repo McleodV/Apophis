@@ -2,9 +2,10 @@ class_name HexCliffColumnShape
 extends Object
 ## Static facet corner placement for a strip's own columns.
 ## Each column draws its own corner heights, so corners on neighboring columns don't line up
-## into level rows. Corners crowd toward the rim and on ridges, so facets there are shorter.
+## into level rows. Corners crowd toward the rim and on faces that stand out, so facets there are shorter.
 ## Corners then shift sideways within the column's room, and in or out by the column's depth
-## and relief noise. Up each column, no corner sits further out than the one below.
+## and relief noise, measured from the wall at rest so pushed ends don't add to it.
+## Up each column, no corner sits further out than the one below.
 
 # Hash seed offsets.
 const _HEIGHT_SEED: int = 5591
@@ -24,15 +25,16 @@ const _LEAN_SWEEPS: int = 3
 # Corner gap scale at facet_height_taper 1: at the base, and at the rim.
 const _TAPER_BASE: float = 1.5
 const _TAPER_RIM: float = 0.4
-# Corner gap scale on a full-depth ridge at ridge_detail 1.
+# Corner gap scale on a face at full column_depth, at ridge_detail 1.
 const _RIDGE_GAP: float = 0.5
 
 
 ## Corner positions of a column, bottom to top.
 ## key: unique per column; seeds its randomness. top, bottom: final positions of its ends; a merging
-## column's bottom is the corner it merges into. wall: heights of the wall's base and rim there.
+## column's bottom is the corner it merges into. ends_push: how far bottom and top already sit out
+## from rest. wall: heights of the wall's base and rim there.
 ## scale: 1 = full shape. Lower values calm sideways shift and pushes.
-static func build(column: HexCliffColumn, key: Vector3i, top: Vector3, bottom: Vector3, wall: Vector2, frame: HexCliffFrame, settings: HexCliffSettings, noise: HexCliffNoise, scale: float) -> PackedVector3Array:
+static func build(column: HexCliffColumn, key: Vector3i, top: Vector3, bottom: Vector3, ends_push: Vector2, wall: Vector2, frame: HexCliffFrame, settings: HexCliffSettings, noise: HexCliffNoise, scale: float) -> PackedVector3Array:
 	var height: float = top.y - bottom.y
 	var heights: PackedFloat32Array = _get_heights(column, key, bottom.y, height, wall, (top + bottom) * 0.5, settings, noise)
 	var bottom_out: float = frame.get_out(bottom)
@@ -52,8 +54,10 @@ static func build(column: HexCliffColumn, key: Vector3i, top: Vector3, bottom: V
 		var line: Vector3 = frame.to_world(alongs[i], lerpf(bottom_out, top_out, heights[i] / height), bottom.y + heights[i])
 		var jitter: float = settings.column_depth_jitter * HexCliffNoise.hash01(key.x, key.y, key.z * 256 + i, settings.noise_seed + _DEPTH_SEED)
 		var push: float = column.depth * (1.0 - jitter) + noise.get_relief(line) * settings.relief_amplitude
+		# The line between the ends already carries their pushes.
+		var carried: float = lerpf(ends_push.x, ends_push.y, heights[i] / height)
 		lines.append(line)
-		pushes.append(push * scale)
+		pushes.append(push * scale - carried)
 	var direction := Vector2(frame.outward.x, frame.outward.z)
 	# A merge point is inside the wall, so there's no foot to set back from.
 	var foot: float = settings.foot_depth if column.merge_side == 0 else 0.0
@@ -81,7 +85,7 @@ static func _limit_lean(alongs: PackedFloat32Array, heights: PackedFloat32Array,
 
 
 # Corner heights above the bottom end, ascending, at jittered gaps. At least one.
-# Gaps shrink toward the rim and on ridges.
+# Gaps shrink toward the rim and on faces that stand out.
 static func _get_heights(column: HexCliffColumn, key: Vector3i, bottom: float, height: float, wall: Vector2, anchor: Vector3, settings: HexCliffSettings, noise: HexCliffNoise) -> PackedFloat32Array:
 	var gap: float = settings.facet_height / maxf(HexCliffBands.get_density(anchor, settings, noise), 0.05)
 	var ridge: float = clampf(column.depth / maxf(settings.column_depth, 0.001), 0.0, 1.0)

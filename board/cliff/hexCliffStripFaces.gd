@@ -64,7 +64,8 @@ static func build(strip: HexCliffStrip, surface: HexTerrainSurface, settings: He
 				var bottom: Vector3 = vertices.positions[end]
 				var top_rest: Vector3 = surface.get_rest_position(top_key)
 				var bottom_rest: Vector3 = vertices.rest[end]
-				var shape: PackedVector3Array = HexCliffColumnShape.build(column, Vector3i(strip.id.x, strip.id.y, strip.id.z * 64 + order[u]), top, bottom, wall, frame, settings, noise, scale)
+				var ends_push := Vector2(frame.get_out(bottom) - frame.get_out(bottom_rest), frame.get_out(top) - frame.get_out(top_rest))
+				var shape: PackedVector3Array = HexCliffColumnShape.build(column, Vector3i(strip.id.x, strip.id.y, strip.id.z * 64 + order[u]), top, bottom, ends_push, wall, frame, settings, noise, scale)
 				for i: int in range(shape.size() - 1, -1, -1):
 					var t: float = (shape[i].y - bottom.y) / (top.y - bottom.y)
 					var index: int = vertices.add_free(HexCliffStrip.get_corner_key(strip.id, corners.size()), bottom_rest.lerp(top_rest, t), shape[i])
