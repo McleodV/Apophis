@@ -7,6 +7,7 @@ extends RefCounted
 ## Vector4i(x, y, -1, 0) = lattice point (x, y).
 ## Vector4i(x, y, d, i) = band i (counted up from the bottom) on the edge from lattice point (x, y)
 ## toward HexLattice.NEIGHBORS[d], d in 0-2.
+## Vector4i(tile.x, tile.y, HexCliffStrip.CORNER_Z + side, i) = a cliff strip's own facet corner i.
 
 ## get_flags(): an edge carries band vertices.
 const FLAG_SPLIT: int = 1
@@ -36,7 +37,6 @@ var _positions: Dictionary = {} # Vertex key -> final position
 var _creases: Dictionary = {} # Band key -> true, for bands with their own push
 var _cliff_edges: Dictionary = {} # Edge key -> bool
 var _chains: Dictionary = {} # Edge key -> Array[Vector4i], origin to end
-var _columns: Dictionary = {} # Edge key -> [wander, Array[Vector4i] origin to end, facet corners only]
 var _triangles: Dictionary = {} # Triangle key -> Triangle
 var _strips: Dictionary = {} # Vector3i(tile.x, tile.y, side) -> HexCliffStrip, or null
 
@@ -65,6 +65,8 @@ static func is_lattice_key(key: Vector4i) -> bool:
 func get_position(key: Vector4i) -> Vector3:
 	var position: Variant = _positions.get(key)
 	if position == null:
+		if HexCliffStrip.is_corner_key(key):
+			return _get_corner_strip(key).get_corner_position(key.w, self)
 		# Band positions are stored when their edge is built, so only lattice points land here.
 		position = _get_point_position(Vector2i(key.x, key.y))
 		_positions[key] = position
@@ -75,6 +77,8 @@ func get_position(key: Vector4i) -> Vector3:
 func get_rest_position(key: Vector4i) -> Vector3:
 	if key.z == _LATTICE:
 		return _get_lattice_rest(Vector2i(key.x, key.y))
+	if HexCliffStrip.is_corner_key(key):
+		return _get_corner_strip(key).get_corner_rest(key.w, self)
 	return _rest[key]
 
 
@@ -124,6 +128,9 @@ func get_triangle(a: Vector2i, b: Vector2i, c: Vector2i) -> Triangle:
 
 ## Faces around a vertex: those of the lattice triangles that contain it, or of their strips.
 func get_triangles_around(key: Vector4i) -> Array[Triangle]:
+	if HexCliffStrip.is_corner_key(key):
+		var own: Array[Triangle] = [_get_corner_strip(key).get_triangle(self)]
+		return own
 	var point := Vector2i(key.x, key.y)
 	var corners: Array[Vector2i] = [] # 3 per lattice triangle
 	if key.z == _LATTICE:
@@ -152,7 +159,7 @@ func get_strip(tile: Vector2i, side: int) -> HexCliffStrip:
 	var id := Vector3i(tile.x, tile.y, side)
 	if not _strips.has(id):
 		var active: bool = HexCliffStrip.is_active(_data, tile, side)
-		_strips[id] = HexCliffStrip.new(tile, side, _subdivisions, _cliff, _edge_max_push, self) if active else null
+		_strips[id] = HexCliffStrip.new(tile, side, _subdivisions, _cliff, _noise, _edge_max_push, self) if active else null
 	return _strips[id]
 
 
@@ -160,21 +167,8 @@ func get_strip(tile: Vector2i, side: int) -> HexCliffStrip:
 func get_chain(from: Vector2i, to: Vector2i) -> Array[Vector4i]:
 	var edge: Vector3i = _get_edge_key(from, to)
 	if not _chains.has(edge):
-		_chains[edge] = _build_chain(edge, false, 0.0, 0.0)
+		_chains[edge] = _build_chain(edge)
 	return _orient_chain(_chains[edge], edge, from)
-
-
-## Facet corners along a crossing edge inside a strip: its ends and crease points, from one end to the other.
-## Only the strip uses the edge, so the other bands are left out.
-## depth: extra push of every corner; positive for a ridge, negative for a groove.
-## wander: scale of the corners' sideways wander. A new value rebuilds the column.
-func get_column(from: Vector2i, to: Vector2i, depth: float, wander: float) -> Array[Vector4i]:
-	var edge: Vector3i = _get_edge_key(from, to)
-	var cached: Array = _columns.get(edge, [])
-	if cached.is_empty() or cached[0] != wander:
-		cached = [wander, _build_chain(edge, true, depth, wander)]
-		_columns[edge] = cached
-	return _orient_chain(cached[1], edge, from)
 
 
 ## True for band vertices that are facet corners.
@@ -281,9 +275,8 @@ static func _orient_chain(chain: Array[Vector4i], edge: Vector3i, from: Vector2i
 	return reversed
 
 
-# Band vertices of a cliff edge, origin to end. creases_only: leave out bands that aren't facet corners.
-# depth: extra push of every corner. wander: scale of the corners' sideways wander.
-func _build_chain(edge: Vector3i, creases_only: bool, depth: float, wander: float) -> Array[Vector4i]:
+# Band vertices of a cliff edge, origin to end.
+func _build_chain(edge: Vector3i) -> Array[Vector4i]:
 	var origin := Vector2i(edge.x, edge.y)
 	var end: Vector2i = origin + _N[edge.z]
 	var chain: Array[Vector4i] = [get_lattice_key(origin)]
@@ -311,24 +304,17 @@ func _build_chain(edge: Vector3i, creases_only: bool, depth: float, wander: floa
 		var crease_bands := PackedInt32Array()
 		var pushes := PackedFloat32Array()
 		var crease_lines := PackedVector3Array()
-		var along := Vector3(-direction.y, 0.0, direction.x) # Sideways along the wall
 		var density: float = HexCliffBands.get_density((start + finish) * 0.5, _cliff, _noise)
 		var creases: PackedByteArray = HexCliffBands.get_creases(edge, heights.size(), density, _cliff)
 		# Bottom to top. Only creases get their own push.
 		for i: int in count:
 			var rest: Vector3 = start.lerp(finish, (heights[i] - start.y) / (finish.y - start.y))
 			var line: Vector3 = rest + lower_shift.lerp(upper_shift, (heights[i] - bottom) / (top - bottom))
-			var is_crease: bool = creases[i] == 1
-			# Only the strip uses a column's corners, so they may also wander sideways.
-			if is_crease and wander != 0.0:
-				var t: float = (heights[i] - bottom) / (top - bottom)
-				line += along * HexCliffDisplacement.get_column_wander(rest, t, HexLattice.get_spacing(_subdivisions), _cliff, _noise) * wander * strength
 			rests.append(rest)
 			lines.append(line)
-			if is_crease:
+			if creases[i] == 1:
 				crease_bands.append(i)
-				var push: float = HexCliffDisplacement.get_crease_push(rest, strength, _cliff, _noise)
-				pushes.append(push + HexCliffDisplacement.get_column_push(edge, i, depth, _cliff) * strength)
+				pushes.append(HexCliffDisplacement.get_crease_push(rest, strength, _cliff, _noise))
 				crease_lines.append(line)
 		HexCliffDisplacement.remove_overhangs(
 			crease_lines,
@@ -347,13 +333,16 @@ func _build_chain(edge: Vector3i, creases_only: bool, depth: float, wander: floa
 			# Keys count up from the bottom; the chain runs origin to end.
 			var index: int = n if rising else count - 1 - n
 			var key := Vector4i(origin.x, origin.y, edge.z, index)
-			if creases_only and not _creases.has(key):
-				continue
 			_rest[key] = rests[index]
 			_positions[key] = finals[index]
 			chain.append(key)
 	chain.append(get_lattice_key(end))
 	return chain
+
+
+func _get_corner_strip(key: Vector4i) -> HexCliffStrip:
+	var strip: Vector3i = HexCliffStrip.get_corner_strip(key)
+	return get_strip(Vector2i(strip.x, strip.y), strip.z)
 
 
 # Steep edges of on-map triangles. Off-map terrain gets no cliffs.
@@ -457,3 +446,16 @@ class Triangle:
 	var keys: Array[Vector4i] = []
 	## Drawn with cliff color and shaded as cliff.
 	var is_cliff: bool = false
+
+	var _normal_sums: Dictionary = {} # Vertex key -> sum of its faces' area-weighted normals
+
+	## Sum of the area-weighted normals of the faces using key. Built for all keys on first call,
+	## so a strip with many vertices isn't scanned once per vertex.
+	func get_normal_sum(key: Vector4i, surface: HexTerrainSurface) -> Vector3:
+		if _normal_sums.is_empty():
+			for i: int in range(0, keys.size(), 3):
+				var a: Vector3 = surface.get_position(keys[i])
+				var face: Vector3 = (surface.get_position(keys[i + 2]) - a).cross(surface.get_position(keys[i + 1]) - a)
+				for j: int in 3:
+					_normal_sums[keys[i + j]] = _normal_sums.get(keys[i + j], Vector3.ZERO) + face
+		return _normal_sums.get(key, Vector3.ZERO)

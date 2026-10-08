@@ -53,16 +53,8 @@ static func _get_split_sums(surface: HexTerrainSurface, key: Vector4i) -> Array[
 	var ground_sum := Vector3.ZERO
 	var cliff_sum := Vector3.ZERO
 	for triangle: HexTerrainSurface.Triangle in surface.get_triangles_around(key):
-		var keys: Array[Vector4i] = triangle.keys
-		for i: int in range(0, keys.size(), 3):
-			if keys[i] != key and keys[i + 1] != key and keys[i + 2] != key:
-				continue
-			var a: Vector3 = surface.get_position(keys[i])
-			var b: Vector3 = surface.get_position(keys[i + 1])
-			var c: Vector3 = surface.get_position(keys[i + 2])
-			var face: Vector3 = (c - a).cross(b - a)
-			if triangle.is_cliff:
-				cliff_sum += face
-			else:
-				ground_sum += face
+		if triangle.is_cliff:
+			cliff_sum += triangle.get_normal_sum(key, surface)
+		else:
+			ground_sum += triangle.get_normal_sum(key, surface)
 	return [ground_sum, cliff_sum]
