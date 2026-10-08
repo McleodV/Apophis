@@ -16,7 +16,7 @@ var along: float = 0.0
 var is_spoke: bool = false
 ## True for spokes and forced columns: placed first, and free columns keep clear of them.
 var is_fixed: bool = false
-## Signed depth. Positive = ridge, pushed out; negative = groove, pushed in.
+## How far its corners stand out from the hex edge. Negative values sink in, held back by the lip.
 var depth: float = 0.0
 ## Max sideways shift of its corners, in lattice steps. Keeps neighboring columns from crossing.
 var room: float = 0.0

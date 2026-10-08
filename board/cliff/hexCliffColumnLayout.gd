@@ -1,16 +1,17 @@
 class_name HexCliffColumnLayout
 extends Object
-## Static placement of a cliff strip's facet columns along the wall, with their ridge and groove depths.
+## Static placement of a cliff strip's facet columns along the wall, with their depths.
 ## Spokes and forced columns are fixed. Free columns fill the space between them at random gaps,
 ## ending at the nearest rim and base points, so several may share one point.
-## Free columns run ridge, slope, groove, slope, ridge. A slope is 1 or 2 bands wide: a 2-band slope
-## bends at an in-between column, which sometimes matches the ridge or groove beside it (a flat band).
+## Seen from above, free columns form flat faces: runs of columns at about one depth, each run a
+## face looking straight out. Neighboring faces sit at different depths, joined by a short step
+## 1 or 2 bands wide, so the wall's outline is a gentle stepped line rather than a sawtooth.
 ## Some free columns branch: they start at the rim and merge into a neighbor partway down, so the
 ## upper wall has more, narrower facets than the lower wall.
 
 # Hash seed offsets.
 const _GAP_SEED: int = 7177
-const _ROLE_SEED: int = 2203
+const _FACE_SEED: int = 2203
 const _DEPTH_SEED: int = 9341
 const _BRANCH_SEED: int = 6143
 # Least gap between free columns, in lattice steps. Smaller gaps make slivers.
@@ -21,8 +22,10 @@ const _FIXED_GAP: float = 0.75
 # Sideways room kept clear toward a free neighbor's shifted corners, and toward a fixed column's ends.
 const _FREE_CLEARANCE: float = 0.05
 const _FIXED_CLEARANCE: float = 0.3
-# A bent slope bends at least this far from either end, unless the band is flat.
-const _BEND_MARGIN: float = 0.2
+# A 2-band step bends this far into the step at least, from either end.
+const _BEND_MARGIN: float = 0.3
+# Depth wobble of a face's columns, as a share of column_depth. Keeps faces from looking machined.
+const _FACE_WOBBLE: float = 0.15
 # Branches merge between these shares of the wall's height above the base.
 const _MERGE_LOW: float = 0.35
 const _MERGE_HIGH: float = 0.7
@@ -65,36 +68,50 @@ static func pick(tile: Vector2i, side: int, subdivisions: int, settings: HexClif
 	return columns
 
 
-# Ridges and grooves alternate over a run of free columns. Some slopes get an in-between column.
+# Splits a run of free columns into flat faces at stepped depths.
+# Depth wanders between 0 and column_depth, stepping in or out at each new face. Faces only stand
+# out: the footprint is one lattice row deep and rims never pull back, so a face set in would be
+# pressed flat against the lip.
 static func _assign_depths(run: Array[HexCliffColumn], key: Vector3i, settings: HexCliffSettings) -> void:
 	if run.is_empty():
 		return
-	var seed_value: int = settings.noise_seed + _ROLE_SEED
-	var extremes := PackedInt32Array()
-	var i: int = 0
-	while i < run.size():
-		extremes.append(i)
-		var split: bool = HexCliffNoise.hash01(key.x, key.y, key.z * 256 + i, seed_value) < settings.slope_split_chance
-		# An in-between column needs an extreme after it.
-		i += 2 if split and i + 2 < run.size() else 1
-	var role: float = 1.0 if HexCliffNoise.hash01(key.x, key.y, key.z, seed_value + 1) < 0.5 else -1.0
+	var seed_value: int = settings.noise_seed + _FACE_SEED
 	var depth_seed: int = settings.noise_seed + _DEPTH_SEED
-	for e: int in extremes.size():
-		var spread: float = settings.column_depth_variance * HexCliffNoise.hash01(key.x, key.y, key.z * 256 + e, depth_seed)
-		run[extremes[e]].depth = role * settings.column_depth * (1.0 - spread)
-		role = -role
-	for e: int in extremes.size() - 1:
-		var a: int = extremes[e]
-		var b: int = extremes[e + 1]
-		if b - a != 2:
-			continue
-		var t: float = lerpf(_BEND_MARGIN, 1.0 - _BEND_MARGIN, HexCliffNoise.hash01(key.x, key.y, key.z * 256 + a, depth_seed + 1))
-		if HexCliffNoise.hash01(key.x, key.y, key.z * 256 + a, depth_seed + 2) < settings.slope_flat_chance:
-			t = 0.0 if HexCliffNoise.hash01(key.x, key.y, key.z * 256 + a, depth_seed + 3) < 0.5 else 1.0
-		run[a + 1].depth = lerpf(run[a].depth, run[b].depth, t)
+	var limit: float = settings.column_depth
+	# Columns per face: a face of n columns spans n - 1 bands, at about column_width each.
+	var mean_columns: float = 1.0 + settings.face_width / maxf(settings.column_width, 0.001)
+	var level: float = limit * HexCliffNoise.hash01(key.x, key.y, key.z, seed_value)
+	var start: int = 0
+	var n: int = 0
+	while start < run.size():
+		n += 1
+		var spread: float = 2.0 * HexCliffNoise.hash01(key.x, key.y, key.z * 256 + n, seed_value) - 1.0
+		var count: int = maxi(2, roundi(mean_columns * (1.0 + settings.face_width_variance * spread)))
+		var end: int = mini(start + count, run.size())
+		for i: int in range(start, end):
+			var wobble: float = 2.0 * HexCliffNoise.hash01(key.x, key.y, key.z * 256 + i, depth_seed) - 1.0
+			run[i].depth = clampf(level + limit * _FACE_WOBBLE * wobble, 0.0, limit)
+		if end >= run.size():
+			break
+		# Step to the next face, turning back at the depth limits.
+		var step: float = limit * (1.0 - settings.column_depth_variance * HexCliffNoise.hash01(key.x, key.y, key.z * 256 + n, depth_seed + 1))
+		var outward: bool = HexCliffNoise.hash01(key.x, key.y, key.z * 256 + n, depth_seed + 2) < 0.5
+		if level + step > limit:
+			outward = false
+		elif level - step < 0.0:
+			outward = true
+		var next_level: float = clampf(level + step if outward else level - step, 0.0, limit)
+		# A 2-band step: the next face's first column sits partway, when that face keeps 2 more.
+		var split: bool = HexCliffNoise.hash01(key.x, key.y, key.z * 256 + n, seed_value + 1) < settings.slope_split_chance
+		if split and end + 2 < run.size():
+			var t: float = lerpf(_BEND_MARGIN, 1.0 - _BEND_MARGIN, HexCliffNoise.hash01(key.x, key.y, key.z * 256 + n, depth_seed + 3))
+			run[end].depth = lerpf(level, next_level, t)
+			end += 1
+		level = next_level
+		start = end
 
 
-# Turns some free columns into branches, merging into the neighbor on the ridge side.
+# Turns some free columns into branches, merging into the neighbor that stands further out.
 # A merge target runs to the base, and never branches itself.
 static func _add_branches(run: Array[HexCliffColumn], key: Vector3i, settings: HexCliffSettings) -> void:
 	var seed_value: int = settings.noise_seed + _BRANCH_SEED
