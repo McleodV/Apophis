@@ -1,6 +1,6 @@
 class_name HexCliffBands
 extends Object
-## Static rules for which lattice edges are cliffs, where their band vertices sit, and which bands crease.
+## Static rules for which lattice edges are cliffs, where their band vertices sit, and which are facet corners.
 ## Results depend only on the edge, so both triangles sharing it agree.
 
 ## Height steps above this many elevation levels are cliffs.
@@ -28,8 +28,8 @@ static func get_heights(low: float, high: float, anchor: Vector3, settings: HexC
 	return heights
 
 
-## True if band index on an edge gets its own push.
-## Other bands lie on the straight line between the creases around them.
+## True if band index on an edge is a facet corner with its own push.
+## Other bands lie on the straight line between the corners around them.
 static func is_crease(edge: Vector3i, index: int, settings: HexCliffSettings) -> bool:
-	var chance: float = clampf(settings.band_height / settings.crease_spacing, 0.0, 1.0)
+	var chance: float = clampf(settings.band_height / settings.facet_height, 0.0, 1.0)
 	return HexCliffNoise.hash01(edge.x, edge.y, edge.z * 1024 + index, settings.noise_seed) < chance

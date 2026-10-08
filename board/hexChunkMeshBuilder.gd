@@ -35,11 +35,16 @@ func _build(tiles: Array[Vector2i]) -> ArrayMesh:
 			# Sector between the previous corner and this one, split into lattice triangles.
 			var u: Vector2i = HexLattice.CORNERS[posmod(corner - 1, 6)]
 			var w: Vector2i = HexLattice.CORNERS[corner]
+			# A cliff along this side replaces the outermost row of lattice triangles.
+			var strip: HexCliffStrip = _surface.get_strip(axial, corner)
+			if strip:
+				_add_faces(strip.get_triangle(_surface))
 			for a: int in subdivisions:
 				for b: int in subdivisions - a:
 					var p: Vector2i = center + u * a + w * b
-					_add_triangle(p, p + w, p + u)
-					if a + b < subdivisions - 1:
+					if strip == null or a + b != subdivisions - 1:
+						_add_triangle(p, p + w, p + u)
+					if a + b < subdivisions - 1 and (strip == null or a + b != subdivisions - 2):
 						_add_triangle(p + u, p + w, p + u + w)
 	return _create_mesh()
 
@@ -52,7 +57,10 @@ func _add_triangle(a: Vector2i, b: Vector2i, c: Vector2i) -> void:
 		_indices.append(_get_vertex(HexTerrainSurface.get_lattice_key(b), is_steep))
 		_indices.append(_get_vertex(HexTerrainSurface.get_lattice_key(c), is_steep))
 		return
-	var triangle: HexTerrainSurface.Triangle = _surface.get_triangle(a, b, c)
+	_add_faces(_surface.get_triangle(a, b, c))
+
+
+func _add_faces(triangle: HexTerrainSurface.Triangle) -> void:
 	for key: Vector4i in triangle.keys:
 		_indices.append(_get_vertex(key, triangle.is_cliff))
 

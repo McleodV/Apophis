@@ -1,15 +1,58 @@
 class_name HexCliffStitcher
 extends Object
-## Static triangulation of a lattice triangle whose edges carry band vertices.
+## Static triangulation of cliff faces whose edges carry band vertices.
 ## Corners and creases are joined into a few large triangles first. Other band vertices lie on
 ## straight lines between creases, so they are filled in without bending those triangles.
+## Where two chains are joined, the join order is chosen to avoid faces that look down (overhangs).
+
+# Cost of a face looking down, per unit of downward normal, against rung height differences.
+const _OVERHANG_WEIGHT: float = 1000.0
 
 
 ## chains[i]: local vertex indices along edge i, from corner i to corner (i + 1) % 3, ends included.
 ## rest: undisplaced positions by local index. All lie on the triangle's plane.
+## positions: final positions by local index.
 ## is_crease: 1 for corners and creases, by local index.
 ## Returns index triples wound like corners 0, 1, 2.
-static func stitch(chains: Array[PackedInt32Array], rest: PackedVector3Array, is_crease: PackedByteArray) -> PackedInt32Array:
+static func stitch(chains: Array[PackedInt32Array], rest: PackedVector3Array, positions: PackedVector3Array, is_crease: PackedByteArray) -> PackedInt32Array:
+	var result: PackedInt32Array = _stitch_creases(chains, rest, positions, is_crease)
+	var overhang: float = _get_overhang(result, positions)
+	if overhang > 0.0:
+		# No large faces avoid looking down here. Every band as a corner gives more ways to join.
+		var every := PackedByteArray()
+		every.resize(is_crease.size())
+		every.fill(1)
+		var fine: PackedInt32Array = _stitch_creases(chains, rest, positions, every)
+		if _get_overhang(fine, positions) < overhang:
+			result = fine
+	return result
+
+
+## Faces of a cliff strip. chains: facet columns along the strip, each a chain of local indices
+## from rim to base. between: points on the straight line between two facet corners, keyed
+## Vector2i(corner, next corner). positions: final positions by local index.
+## outward: horizontal direction the face looks.
+## Returns front-facing index triples.
+static func stitch_columns(chains: Array[PackedInt32Array], between: Dictionary, rest: PackedVector3Array, positions: PackedVector3Array, outward: Vector3) -> PackedInt32Array:
+	# Every triangle turns the same way in (along strip, height). Decide once, on a large steep
+	# triangle, whether that way is front-facing: its upward face must point out of the cliff.
+	var first_top: Vector3 = rest[chains[0][0]]
+	var first_bottom: Vector3 = rest[chains[0][chains[0].size() - 1]]
+	var last_top: Vector3 = rest[chains[chains.size() - 1][0]]
+	var flip: bool = (last_top - first_top).cross(first_bottom - first_top).dot(outward) < 0.0
+	var result := PackedInt32Array()
+	for c: int in chains.size() - 1:
+		_fill(_zip_columns(chains[c], chains[c + 1], positions, -1.0 if flip else 1.0), between, rest, result)
+	if flip:
+		for i: int in range(0, result.size(), 3):
+			var swap: int = result[i + 1]
+			result[i + 1] = result[i + 2]
+			result[i + 2] = swap
+	return result
+
+
+# Joins corners and creases into large triangles, then fills in the other bands.
+static func _stitch_creases(chains: Array[PackedInt32Array], rest: PackedVector3Array, positions: PackedVector3Array, is_crease: PackedByteArray) -> PackedInt32Array:
 	var crease_chains: Array[PackedInt32Array] = []
 	var between: Dictionary = {} # Vector2i(crease, next crease) -> vertices between them
 	for chain: PackedInt32Array in chains:
@@ -23,8 +66,23 @@ static func stitch(chains: Array[PackedInt32Array], rest: PackedVector3Array, is
 			creases.append(chain[i])
 			last = i
 		crease_chains.append(creases)
-	var large: PackedInt32Array = _stitch_chains(crease_chains, rest)
 	var result := PackedInt32Array()
+	_fill(_stitch_chains(crease_chains, rest, positions), between, rest, result)
+	return result
+
+
+# Downward area of front-facing triangles: sum of area times how far each normal points down.
+static func _get_overhang(triangles: PackedInt32Array, positions: PackedVector3Array) -> float:
+	var total: float = 0.0
+	for i: int in range(0, triangles.size(), 3):
+		var origin: Vector3 = positions[triangles[i]]
+		var normal: Vector3 = (positions[triangles[i + 2]] - origin).cross(positions[triangles[i + 1]] - origin)
+		total += maxf(0.0, -normal.y)
+	return total
+
+
+# Splits large triangles around the points lying on their sides, keeping each one flat.
+static func _fill(large: PackedInt32Array, between: Dictionary, rest: PackedVector3Array, result: PackedInt32Array) -> void:
 	for t: int in range(0, large.size(), 3):
 		# Each vertex records which sides of the large triangle it lies on, as bits.
 		# Corner k is on sides k and k - 1; points between corners k and k + 1 are on side k.
@@ -39,16 +97,92 @@ static func stitch(chains: Array[PackedInt32Array], rest: PackedVector3Array, is
 				polygon.append(v)
 				sides.append(1 << k)
 		_clip_ears(polygon, sides, rest, result)
+
+
+# Large triangles between two columns, each a chain from top to bottom.
+# The columns may share their top or their bottom vertex. With left before right along the strip,
+# every triangle turns counterclockwise in (along strip, height).
+# face_sign: 1 if that way is front-facing, -1 if not.
+static func _zip_columns(left: PackedInt32Array, right: PackedInt32Array, positions: PackedVector3Array, face_sign: float) -> PackedInt32Array:
+	var result := PackedInt32Array()
+	var shared_top: bool = left[0] == right[0]
+	var shared_bottom: bool = left[left.size() - 1] == right[right.size() - 1]
+	var trim: int = 2 if shared_bottom else 1
+	var last_left: int = left.size() - trim
+	var last_right: int = right.size() - trim
+	var start: int = 0
+	if shared_top:
+		_add(result, left[0], left[1], right[1])
+		start = 1
+	result.append_array(_ladder(left, right, start, last_left, last_right, positions, face_sign))
+	if shared_bottom:
+		_add(result, left[last_left], left[left.size() - 1], right[last_right])
 	return result
 
 
+# Triangles joining two chains, from rung (first[start], second[start]) to rung
+# (first[last_first], second[last_second]). Each step moves one end of the rung along its chain,
+# adding (first[i], first[i + 1], second[j]) or (first[i], second[j + 1], second[j]).
+# Both chains are straight in rest, so every order of steps is a valid triangulation. Picks the
+# order with the least overhang, then the most level rungs.
+# face_sign: 1 if those triangles are front-facing as listed, -1 if not.
+static func _ladder(first: PackedInt32Array, second: PackedInt32Array, start: int, last_first: int, last_second: int, positions: PackedVector3Array, face_sign: float) -> PackedInt32Array:
+	var width: int = last_second + 1
+	var size: int = (last_first + 1) * width
+	var cost := PackedFloat32Array() # Least cost to reach rung (i, j), at i * width + j
+	var from_first := PackedByteArray() # 1 if that rung was reached by a step along first
+	cost.resize(size)
+	cost.fill(INF)
+	from_first.resize(size)
+	cost[start * width + start] = 0.0
+	for i: int in range(start, last_first + 1):
+		for j: int in range(start, last_second + 1):
+			var here: float = cost[i * width + j]
+			if here == INF:
+				continue
+			if i < last_first:
+				var along_first: float = here + _get_step_cost(first[i], first[i + 1], second[j], first[i + 1], second[j], positions, face_sign)
+				if along_first < cost[(i + 1) * width + j]:
+					cost[(i + 1) * width + j] = along_first
+					from_first[(i + 1) * width + j] = 1
+			if j < last_second:
+				var along_second: float = here + _get_step_cost(first[i], second[j + 1], second[j], first[i], second[j + 1], positions, face_sign)
+				if along_second < cost[i * width + j + 1]:
+					cost[i * width + j + 1] = along_second
+					from_first[i * width + j + 1] = 0
+	# Walk back from the last rung, listing each triangle backward so one reverse fixes both orders.
+	var steps := PackedInt32Array()
+	var i: int = last_first
+	var j: int = last_second
+	while i > start or j > start:
+		if from_first[i * width + j]:
+			i -= 1
+			steps.append_array([second[j], first[i + 1], first[i]])
+		else:
+			j -= 1
+			steps.append_array([second[j], second[j + 1], first[i]])
+	steps.reverse()
+	return steps
+
+
+# Cost of adding triangle a, b, c and moving the rung to (rung_first, rung_second).
+static func _get_step_cost(a: int, b: int, c: int, rung_first: int, rung_second: int, positions: PackedVector3Array, face_sign: float) -> float:
+	var origin: Vector3 = positions[a]
+	var normal: Vector3 = (positions[c] - origin).cross(positions[b] - origin) * face_sign
+	var length: float = normal.length()
+	var overhang: float = maxf(0.0, -normal.y / length) if length > 1e-9 else 0.0
+	return overhang * _OVERHANG_WEIGHT + absf(positions[rung_first].y - positions[rung_second].y)
+
+
 # Large triangles between chains of corners and creases, wound like corners 0, 1, 2.
-static func _stitch_chains(chains: Array[PackedInt32Array], rest: PackedVector3Array) -> PackedInt32Array:
+static func _stitch_chains(chains: Array[PackedInt32Array], rest: PackedVector3Array, positions: PackedVector3Array) -> PackedInt32Array:
 	var split: Array[int] = []
 	for i: int in 3:
 		if chains[i].size() > 2:
 			split.append(i)
 	var result := PackedInt32Array()
+	var corner: Vector3 = rest[chains[0][0]]
+	var front: Vector3 = (rest[chains[1][0]] - corner).cross(rest[chains[2][0]] - corner)
 	match split.size():
 		0:
 			_add(result, chains[0][0], chains[1][0], chains[2][0])
@@ -58,7 +192,7 @@ static func _stitch_chains(chains: Array[PackedInt32Array], rest: PackedVector3A
 			# Apex: the corner opposite the unsplit edge.
 			var unsplit: int = 3 - split[0] - split[1]
 			var apex: int = (unsplit + 2) % 3
-			result = _zip(_get_chain(chains, apex, (apex + 1) % 3), _get_chain(chains, apex, (apex + 2) % 3), rest)
+			result = _zip(_get_chain(chains, apex, (apex + 1) % 3), _get_chain(chains, apex, (apex + 2) % 3), rest, positions, front)
 		3:
 			var order: Array[int] = [0, 1, 2]
 			order.sort_custom(func(a: int, b: int) -> bool: return rest[chains[a][0]].y > rest[chains[b][0]].y)
@@ -68,8 +202,8 @@ static func _stitch_chains(chains: Array[PackedInt32Array], rest: PackedVector3A
 			var long_chain: PackedInt32Array = _get_chain(chains, top, bottom)
 			var bent_chain: PackedInt32Array = _get_chain(chains, top, middle)
 			bent_chain.append_array(_get_chain(chains, middle, bottom).slice(1))
-			result = _zip(long_chain, bent_chain, rest)
-	return _orient(result, rest, chains[0][0], chains[1][0], chains[2][0])
+			result = _zip(long_chain, bent_chain, rest, positions, front)
+	return _orient(result, rest, front)
 
 
 # Chain from one corner to another, reversing the stored edge if needed.
@@ -101,34 +235,20 @@ static func _fan(apex: int, chain: PackedInt32Array) -> PackedInt32Array:
 	return result
 
 
-# Triangulates between two chains that start at the same vertex, pairing vertices by height.
+# Triangulates between two chains that start at the same vertex.
 # If they also end at the same vertex, the last triangle closes on it.
-static func _zip(first: PackedInt32Array, second: PackedInt32Array, rest: PackedVector3Array) -> PackedInt32Array:
+# front: normal that front-facing triangles share in rest.
+static func _zip(first: PackedInt32Array, second: PackedInt32Array, rest: PackedVector3Array, positions: PackedVector3Array, front: Vector3) -> PackedInt32Array:
 	var result := PackedInt32Array()
 	var shared_end: bool = first[first.size() - 1] == second[second.size() - 1]
 	var trim: int = 2 if shared_end else 1
-	var last_first: int = first.size() - trim
-	var last_second: int = second.size() - trim
-	var start_y: float = rest[first[0]].y
 	_add(result, first[0], first[1], second[1])
-	var i: int = 1
-	var j: int = 1
-	while i < last_first or j < last_second:
-		var advance_first: bool
-		if i == last_first:
-			advance_first = false
-		elif j == last_second:
-			advance_first = true
-		else:
-			advance_first = absf(rest[first[i + 1]].y - start_y) <= absf(rest[second[j + 1]].y - start_y)
-		if advance_first:
-			_add(result, first[i], first[i + 1], second[j])
-			i += 1
-		else:
-			_add(result, first[i], second[j + 1], second[j])
-			j += 1
+	# All triangles between the chains turn the same way as the first.
+	var origin: Vector3 = rest[first[0]]
+	var turn: float = (rest[first[1]] - origin).cross(rest[second[1]] - origin).dot(front)
+	result.append_array(_ladder(first, second, 1, first.size() - trim, second.size() - trim, positions, 1.0 if turn > 0.0 else -1.0))
 	if shared_end:
-		_add(result, first[last_first], second[last_second], first[first.size() - 1])
+		_add(result, first[first.size() - 2], second[second.size() - 2], first[first.size() - 1])
 	return result
 
 
@@ -173,13 +293,12 @@ static func _is_ear(remaining: PackedInt32Array, a: int, b: int, c: int, polygon
 	return true
 
 
-# Flips triangles wound against the corners. Works because all rest points are coplanar.
-static func _orient(triangles: PackedInt32Array, rest: PackedVector3Array, a: int, b: int, c: int) -> PackedInt32Array:
-	var reference: Vector3 = (rest[b] - rest[a]).cross(rest[c] - rest[a])
+# Flips triangles wound against front. Works because all rest points are coplanar.
+static func _orient(triangles: PackedInt32Array, rest: PackedVector3Array, front: Vector3) -> PackedInt32Array:
 	for i: int in range(0, triangles.size(), 3):
 		var p: Vector3 = rest[triangles[i]]
 		var face: Vector3 = (rest[triangles[i + 1]] - p).cross(rest[triangles[i + 2]] - p)
-		if face.dot(reference) < 0.0:
+		if face.dot(front) < 0.0:
 			var swap: int = triangles[i + 1]
 			triangles[i + 1] = triangles[i + 2]
 			triangles[i + 2] = swap
