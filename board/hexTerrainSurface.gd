@@ -171,11 +171,6 @@ func get_chain(from: Vector2i, to: Vector2i) -> Array[Vector4i]:
 	return _orient_chain(_chains[edge], edge, from)
 
 
-## True for band vertices that are facet corners.
-func is_crease_key(key: Vector4i) -> bool:
-	return _creases.has(key)
-
-
 ## True if the lattice edge between neighbors a and b carries band vertices.
 func has_bands(a: Vector2i, b: Vector2i) -> bool:
 	return _is_cliff_edge(_get_edge_key(a, b))
@@ -306,6 +301,9 @@ func _build_chain(edge: Vector3i) -> Array[Vector4i]:
 		var crease_lines := PackedVector3Array()
 		var density: float = HexCliffBands.get_density((start + finish) * 0.5, _cliff, _noise)
 		var creases: PackedByteArray = HexCliffBands.get_creases(edge, heights.size(), density, _cliff)
+		# Spokes stay straight, so the slabs beside them can pass through them.
+		if HexCliffStrip.is_spoke(_data, _subdivisions, origin, end):
+			creases.fill(0)
 		# Bottom to top. Only creases get their own push.
 		for i: int in count:
 			var rest: Vector3 = start.lerp(finish, (heights[i] - start.y) / (finish.y - start.y))

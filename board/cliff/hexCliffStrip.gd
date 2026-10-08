@@ -1,14 +1,17 @@
 class_name HexCliffStrip
 extends RefCounted
-## The cliff face along one hex side, rebuilt as many flat facets.
+## The cliff face along one hex side, rebuilt as flat slabs joined by narrow seams.
 ## A strip is the row of lattice triangles between a low tile's edge and the next lattice row in.
 ## Only its rim points (on the hex edge), base points (one row in), and the spoke edges at its two
 ## corners are shared with other terrain, so its inside can be triangulated freely.
 ## Crossing edge k joins the rim to the base, numbered along the side; 0 and the last are the spokes.
-## Facet columns run from rim to base (see HexCliffColumnLayout). Neighboring columns are joined into
-## triangles, and rim and base points between column ends sit on the straight line between them,
-## so facets stay flush. Columns other than spokes hold the strip's own corners (HexCliffColumnShape).
-## Faces are assembled by HexCliffStripFaces. No face leans out going up at any spot along the wall.
+## Facet columns run from rim to base along slab edges (see HexCliffColumnLayout). Neighboring
+## columns are joined into triangles, and rim and base points between column ends sit on the
+## straight line between them, so slabs stay flat. Columns other than spokes hold the strip's own
+## corners (HexCliffColumnShape).
+## Spokes are kept straight, and the slabs beside them pass through them, so walls stay flat up to
+## hex corners. Faces are assembled by HexCliffStripFaces. No face leans out going up at any spot
+## along the wall.
 
 ## Returned by find_for_triangle() for a triangle outside every strip.
 const NONE := Vector3i(0, 0, -1)
@@ -66,9 +69,34 @@ func _init(tile: Vector2i, side: int, subdivisions: int, settings: HexCliffSetti
 			forced[2 * b + 2] = true
 	var sorted: Array = forced.keys()
 	sorted.sort()
-	columns = HexCliffColumnLayout.pick(tile, side, subdivisions, settings, PackedInt32Array(sorted))
 	outward = HexMath.axial_to_world(tile) - HexMath.axial_to_world(HexMath.neighbor(tile, side))
 	outward = outward.normalized()
+	var spokes: Array[PackedVector2Array] = [
+		_get_spoke_line(rim[0], base[0], surface),
+		_get_spoke_line(rim[subdivisions], base[subdivisions - 1], surface),
+	]
+	columns = HexCliffColumnLayout.pick(tile, side, subdivisions, settings, PackedInt32Array(sorted), max_push, spokes)
+
+
+## True if the lattice edge between a and b is a spoke of an active strip: the edge from a hex
+## corner one row into a low tile, at either end of a cliff strip. Spokes are kept straight, so
+## the slabs beside them can pass through them.
+static func is_spoke(data: HexMapData, subdivisions: int, a: Vector2i, b: Vector2i) -> bool:
+	for flip: int in 2:
+		var corner: Vector2i = b if flip else a
+		var inner: Vector2i = a if flip else b
+		var home: Vector2i = HexMath.world_to_axial(HexLattice.to_world(corner, subdivisions))
+		# A hex corner may round to any of its three tiles, so check the neighbors too.
+		for t: int in 7:
+			var tile: Vector2i = home if t == 6 else HexMath.neighbor(home, t)
+			for side: int in 6:
+				var ab: Vector2i = _get_sector_coords(tile, side, corner, subdivisions)
+				var inner_ab: Vector2i = _get_sector_coords(tile, side, inner, subdivisions)
+				var first: bool = ab == Vector2i(subdivisions, 0) and inner_ab == Vector2i(subdivisions - 1, 0)
+				var last: bool = ab == Vector2i(0, subdivisions) and inner_ab == Vector2i(0, subdivisions - 1)
+				if (first or last) and is_active(data, tile, side):
+					return true
+	return false
 
 
 ## Key of the strip's own corner index.
@@ -148,28 +176,26 @@ static func get_bottom_index(k: int) -> int:
 
 
 ## Final position of a rim or base point inside the strip.
-## Column ends push out by their depth; negative depths stay put, so rims never pull back.
+## Column ends push out as their slab planes say there, averaged where columns share an end.
+## Pushes stay between 0 and the push limit, so rims never pull back.
 ## Points between column ends sit on the straight line between them, so the facet touching them stays flush.
 func get_point_position(is_base: bool, index: int, surface: HexTerrainSurface) -> Vector3:
 	var row: Array[Vector2i] = base if is_base else rim
 	var left: int = -1
 	var right: int = -1
-	var depth: float = 0.0
+	var push: float = 0.0
 	var ends: int = 0
 	for column: HexCliffColumn in columns:
-		# A merging column's bottom is its neighbor's.
-		if is_base and column.merge_side != 0:
-			continue
 		var end: int = column.bottom if is_base else column.top
 		if end == index:
-			depth += column.depth
+			push += column.get_bottom_push() if is_base else column.get_top_push()
 			ends += 1
 		elif end < index:
 			left = end
 		elif right < 0:
 			right = end
 	if ends > 0:
-		var push: float = clampf(depth / ends, 0.0, _max_push)
+		push = clampf(push / ends, 0.0, _max_push)
 		return surface.get_rest_position(HexTerrainSurface.get_lattice_key(row[index])) + outward * push
 	var start: Vector3 = surface.get_position(HexTerrainSurface.get_lattice_key(row[left]))
 	var finish: Vector3 = surface.get_position(HexTerrainSurface.get_lattice_key(row[right]))
@@ -197,6 +223,23 @@ func get_corner_position(index: int, surface: HexTerrainSurface) -> Vector3:
 func get_corner_rest(index: int, surface: HexTerrainSurface) -> Vector3:
 	get_triangle(surface)
 	return _corner_rests[index]
+
+
+# A spoke's ends in wall coordinates: [rim, base], each Vector2(along, push).
+func _get_spoke_line(top: Vector2i, bottom: Vector2i, surface: HexTerrainSurface) -> PackedVector2Array:
+	var frame := HexCliffFrame.new(
+		surface.get_rest_position(HexTerrainSurface.get_lattice_key(rim[0])),
+		surface.get_rest_position(HexTerrainSurface.get_lattice_key(rim[rim.size() - 1])),
+		outward,
+		HexLattice.get_spacing(rim.size() - 1),
+	)
+	var rim_point: Vector3 = surface.get_position(HexTerrainSurface.get_lattice_key(top))
+	var base_point: Vector3 = surface.get_position(HexTerrainSurface.get_lattice_key(bottom))
+	var base_rest: Vector3 = surface.get_rest_position(HexTerrainSurface.get_lattice_key(bottom))
+	return PackedVector2Array([
+		Vector2(frame.get_along(rim_point), frame.get_out(rim_point)),
+		Vector2(frame.get_along(base_point), frame.get_out(base_point) - frame.get_out(base_rest)),
+	])
 
 
 # Row of a lattice point in a tile's sector toward side, or -1 if it's outside that sector.
