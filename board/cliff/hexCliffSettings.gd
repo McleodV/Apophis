@@ -33,10 +33,18 @@ extends Resource
 @export_range(0.0, 1.0, 0.01) var slope_split_chance: float = 0.5
 ## Chance an in-between column matches the ridge or groove beside it, so one band faces straight out.
 @export_range(0.0, 1.0, 0.01) var slope_flat_chance: float = 0.35
+## Chance a column starts at the rim but merges into its ridge-side neighbor partway down.
+## The upper wall then has more, narrower facets than the lower wall.
+@export_range(0.0, 1.0, 0.01) var column_branch_chance: float = 0.5
 
 @export_group("Facets")
 ## Average vertical gap between facet corners on a column. Lower = more, shorter facets.
-@export_range(0.02, 3.0, 0.01) var facet_height: float = 0.14
+@export_range(0.02, 3.0, 0.01) var facet_height: float = 0.15
+## How much facets shorten toward the rim. 0 = same height throughout.
+## 1 = facets near the base 1.5x facet_height, near the rim 0.4x.
+@export_range(0.0, 1.0, 0.01) var facet_height_taper: float = 0.75
+## How much shorter facets are on ridges than in grooves and slopes. 0 = same, 1 = half.
+@export_range(0.0, 1.0, 0.01) var ridge_detail: float = 0.6
 ## Spread of corner spacing from place to place along walls. 0 = even, 1 = from twice as dense to very sparse.
 @export_range(0.0, 1.0, 0.01) var facet_height_variance: float = 0.3
 ## Random up/down shift of each column's facet corners, as a fraction of facet_height.

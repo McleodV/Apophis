@@ -157,6 +157,9 @@ func get_point_position(is_base: bool, index: int, surface: HexTerrainSurface) -
 	var depth: float = 0.0
 	var ends: int = 0
 	for column: HexCliffColumn in columns:
+		# A merging column's bottom is its neighbor's.
+		if is_base and column.merge_side != 0:
+			continue
 		var end: int = column.bottom if is_base else column.top
 		if end == index:
 			depth += column.depth

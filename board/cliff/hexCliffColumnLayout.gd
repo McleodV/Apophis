@@ -5,11 +5,14 @@ extends Object
 ## ending at the nearest rim and base points, so several may share one point.
 ## Free columns run ridge, slope, groove, slope, ridge. A slope is 1 or 2 bands wide: a 2-band slope
 ## bends at an in-between column, which sometimes matches the ridge or groove beside it (a flat band).
+## Some free columns branch: they start at the rim and merge into a neighbor partway down, so the
+## upper wall has more, narrower facets than the lower wall.
 
 # Hash seed offsets.
 const _GAP_SEED: int = 7177
 const _ROLE_SEED: int = 2203
 const _DEPTH_SEED: int = 9341
+const _BRANCH_SEED: int = 6143
 # Least gap between free columns, in lattice steps. Smaller gaps make slivers.
 const _MIN_GAP: float = 0.55
 # Least gap between a free column and a fixed one. Spokes are pushed along the hex corner's
@@ -20,6 +23,9 @@ const _FREE_CLEARANCE: float = 0.05
 const _FIXED_CLEARANCE: float = 0.3
 # A bent slope bends at least this far from either end, unless the band is flat.
 const _BEND_MARGIN: float = 0.2
+# Branches merge between these shares of the wall's height above the base.
+const _MERGE_LOW: float = 0.35
+const _MERGE_HIGH: float = 0.7
 
 
 ## Columns of a strip, ordered along the wall. forced: crossing edges that must be columns.
@@ -50,6 +56,7 @@ static func pick(tile: Vector2i, side: int, subdivisions: int, settings: HexClif
 			var spread: float = 2.0 * HexCliffNoise.hash01(tile.x, tile.y, side * 4096 + n, seed_value + 1) - 1.0
 			position += maxf(_MIN_GAP, mean_gap * (1.0 + settings.column_width_variance * spread))
 		_assign_depths(run, Vector3i(tile.x, tile.y, side * 64 + f), settings)
+		_add_branches(run, Vector3i(tile.x, tile.y, side * 64 + f), settings)
 		columns.append_array(run)
 	# Fixed columns keep room 0, so free neighbors may take the space beside them.
 	for c: int in range(1, columns.size() - 1):
@@ -85,6 +92,30 @@ static func _assign_depths(run: Array[HexCliffColumn], key: Vector3i, settings: 
 		if HexCliffNoise.hash01(key.x, key.y, key.z * 256 + a, depth_seed + 2) < settings.slope_flat_chance:
 			t = 0.0 if HexCliffNoise.hash01(key.x, key.y, key.z * 256 + a, depth_seed + 3) < 0.5 else 1.0
 		run[a + 1].depth = lerpf(run[a].depth, run[b].depth, t)
+
+
+# Turns some free columns into branches, merging into the neighbor on the ridge side.
+# A merge target runs to the base, and never branches itself.
+static func _add_branches(run: Array[HexCliffColumn], key: Vector3i, settings: HexCliffSettings) -> void:
+	var seed_value: int = settings.noise_seed + _BRANCH_SEED
+	var targets: Dictionary = {} # Run index -> true
+	for i: int in run.size():
+		if targets.has(i) or HexCliffNoise.hash01(key.x, key.y, key.z * 256 + i, seed_value) >= settings.column_branch_chance:
+			continue
+		var side: int = 0
+		for step: int in [-1, 1]:
+			var j: int = i + step
+			if j < 0 or j >= run.size() or run[j].merge_side != 0:
+				continue
+			if side == 0 or run[j].depth > run[i + side].depth:
+				side = step
+		if side == 0:
+			continue
+		var target: HexCliffColumn = run[i + side]
+		run[i].merge_side = side
+		run[i].merge_height = lerpf(_MERGE_LOW, _MERGE_HIGH, HexCliffNoise.hash01(key.x, key.y, key.z * 256 + i, seed_value + 1))
+		run[i].bottom = target.bottom
+		targets[i + side] = true
 
 
 # How far column's corners may shift toward neighbor, in lattice steps.
