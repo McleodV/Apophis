@@ -5,8 +5,11 @@ extends Object
 ## straight lines between creases, so they are filled in without bending those triangles.
 ## Where two chains are joined, the join order is chosen to avoid faces that look down (overhangs).
 
-# Cost of a face looking down, per unit of downward normal, against rung height differences.
+# Ladder costs against rung height differences: a face looking down, per unit of downward normal,
+# and a thin face, per radian its smallest angle falls short of _SLIVER_ANGLE.
 const _OVERHANG_WEIGHT: float = 1000.0
+const _SLIVER_WEIGHT: float = 2.0
+const _SLIVER_ANGLE: float = 0.35
 
 
 ## chains[i]: local vertex indices along edge i, from corner i to corner (i + 1) % 3, ends included.
@@ -171,7 +174,12 @@ static func _get_step_cost(a: int, b: int, c: int, rung_first: int, rung_second:
 	var normal: Vector3 = (positions[c] - origin).cross(positions[b] - origin) * face_sign
 	var length: float = normal.length()
 	var overhang: float = maxf(0.0, -normal.y / length) if length > 1e-9 else 0.0
-	return overhang * _OVERHANG_WEIGHT + absf(positions[rung_first].y - positions[rung_second].y)
+	var thinness: float = maxf(0.0, _SLIVER_ANGLE - _get_smallest_angle(positions[a], positions[b], positions[c]))
+	return overhang * _OVERHANG_WEIGHT + thinness * _SLIVER_WEIGHT + absf(positions[rung_first].y - positions[rung_second].y)
+
+
+static func _get_smallest_angle(a: Vector3, b: Vector3, c: Vector3) -> float:
+	return minf((b - a).angle_to(c - a), minf((c - b).angle_to(a - b), (a - c).angle_to(b - c)))
 
 
 # Large triangles between chains of corners and creases, wound like corners 0, 1, 2.
