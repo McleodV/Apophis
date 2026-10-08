@@ -10,6 +10,8 @@ const CLIFF_LEVELS: float = 1.25
 const _MIN_END_GAP: float = 0.35
 ## Combined band shift limit, as a fraction of band_height. Keeps bands in order.
 const _MAX_SHIFT: float = 0.45
+## Random spread of gaps between facet corners, as a fraction of the average gap.
+const _GAP_JITTER: float = 0.4
 
 
 ## Band heights strictly between low and high, ascending.
@@ -28,8 +30,27 @@ static func get_heights(low: float, high: float, anchor: Vector3, settings: HexC
 	return heights
 
 
-## True if band index on an edge is a facet corner with its own push.
+## Which of an edge's count bands are facet corners with their own push: 1 per corner.
 ## Other bands lie on the straight line between the corners around them.
-static func is_crease(edge: Vector3i, index: int, settings: HexCliffSettings) -> bool:
-	var chance: float = clampf(settings.band_height / settings.facet_height, 0.0, 1.0)
-	return HexCliffNoise.hash01(edge.x, edge.y, edge.z * 1024 + index, settings.noise_seed) < chance
+## Corners are spread at jittered gaps, so columns rarely get long runs without one.
+## density: from get_density(); scales how often bands are corners.
+static func get_creases(edge: Vector3i, count: int, density: float, settings: HexCliffSettings) -> PackedByteArray:
+	var creases := PackedByteArray()
+	creases.resize(count)
+	var mean_gap: float = maxf(settings.facet_height / (settings.band_height * maxf(density, 0.05)), 1.0)
+	# Start part way into the first gap, so corners don't line up across columns.
+	var position: float = mean_gap * HexCliffNoise.hash01(edge.x, edge.y, edge.z, settings.noise_seed)
+	var n: int = 0
+	while roundi(position) < count:
+		creases[maxi(roundi(position), 0)] = 1
+		n += 1
+		var spread: float = 2.0 * HexCliffNoise.hash01(edge.x, edge.y, edge.z * 1024 + n, settings.noise_seed) - 1.0
+		position += maxf(mean_gap * (1.0 + _GAP_JITTER * spread), 1.0)
+	return creases
+
+
+## Facet corner density near anchor, an edge's undisplaced midpoint.
+## Varies slowly along walls, so facet sizes change from place to place while neighboring
+## columns keep similar corner counts and join without fans of thin triangles.
+static func get_density(anchor: Vector3, settings: HexCliffSettings, noise: HexCliffNoise) -> float:
+	return 1.0 + settings.facet_height_variance * noise.get_density(anchor)

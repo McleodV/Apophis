@@ -36,7 +36,7 @@ var _positions: Dictionary = {} # Vertex key -> final position
 var _creases: Dictionary = {} # Band key -> true, for bands with their own push
 var _cliff_edges: Dictionary = {} # Edge key -> bool
 var _chains: Dictionary = {} # Edge key -> Array[Vector4i], origin to end
-var _columns: Dictionary = {} # Edge key -> Array[Vector4i], origin to end, facet corners only
+var _columns: Dictionary = {} # Edge key -> [wander, Array[Vector4i] origin to end, facet corners only]
 var _triangles: Dictionary = {} # Triangle key -> Triangle
 var _strips: Dictionary = {} # Vector3i(tile.x, tile.y, side) -> HexCliffStrip, or null
 
@@ -152,7 +152,7 @@ func get_strip(tile: Vector2i, side: int) -> HexCliffStrip:
 	var id := Vector3i(tile.x, tile.y, side)
 	if not _strips.has(id):
 		var active: bool = HexCliffStrip.is_active(_data, tile, side)
-		_strips[id] = HexCliffStrip.new(tile, side, _subdivisions, _cliff, self) if active else null
+		_strips[id] = HexCliffStrip.new(tile, side, _subdivisions, _cliff, _edge_max_push, self) if active else null
 	return _strips[id]
 
 
@@ -160,17 +160,21 @@ func get_strip(tile: Vector2i, side: int) -> HexCliffStrip:
 func get_chain(from: Vector2i, to: Vector2i) -> Array[Vector4i]:
 	var edge: Vector3i = _get_edge_key(from, to)
 	if not _chains.has(edge):
-		_chains[edge] = _build_chain(edge, false)
+		_chains[edge] = _build_chain(edge, false, 0.0, 0.0)
 	return _orient_chain(_chains[edge], edge, from)
 
 
 ## Facet corners along a crossing edge inside a strip: its ends and crease points, from one end to the other.
 ## Only the strip uses the edge, so the other bands are left out.
-func get_column(from: Vector2i, to: Vector2i) -> Array[Vector4i]:
+## depth: extra push of every corner; positive for a ridge, negative for a groove.
+## wander: scale of the corners' sideways wander. A new value rebuilds the column.
+func get_column(from: Vector2i, to: Vector2i, depth: float, wander: float) -> Array[Vector4i]:
 	var edge: Vector3i = _get_edge_key(from, to)
-	if not _columns.has(edge):
-		_columns[edge] = _build_chain(edge, true)
-	return _orient_chain(_columns[edge], edge, from)
+	var cached: Array = _columns.get(edge, [])
+	if cached.is_empty() or cached[0] != wander:
+		cached = [wander, _build_chain(edge, true, depth, wander)]
+		_columns[edge] = cached
+	return _orient_chain(cached[1], edge, from)
 
 
 ## True for band vertices that are facet corners.
@@ -278,7 +282,8 @@ static func _orient_chain(chain: Array[Vector4i], edge: Vector3i, from: Vector2i
 
 
 # Band vertices of a cliff edge, origin to end. creases_only: leave out bands that aren't facet corners.
-func _build_chain(edge: Vector3i, creases_only: bool) -> Array[Vector4i]:
+# depth: extra push of every corner. wander: scale of the corners' sideways wander.
+func _build_chain(edge: Vector3i, creases_only: bool, depth: float, wander: float) -> Array[Vector4i]:
 	var origin := Vector2i(edge.x, edge.y)
 	var end: Vector2i = origin + _N[edge.z]
 	var chain: Array[Vector4i] = [get_lattice_key(origin)]
@@ -306,17 +311,35 @@ func _build_chain(edge: Vector3i, creases_only: bool) -> Array[Vector4i]:
 		var crease_bands := PackedInt32Array()
 		var pushes := PackedFloat32Array()
 		var crease_lines := PackedVector3Array()
+		var along := Vector3(-direction.y, 0.0, direction.x) # Sideways along the wall
+		var density: float = HexCliffBands.get_density((start + finish) * 0.5, _cliff, _noise)
+		var creases: PackedByteArray = HexCliffBands.get_creases(edge, heights.size(), density, _cliff)
 		# Bottom to top. Only creases get their own push.
 		for i: int in count:
 			var rest: Vector3 = start.lerp(finish, (heights[i] - start.y) / (finish.y - start.y))
 			var line: Vector3 = rest + lower_shift.lerp(upper_shift, (heights[i] - bottom) / (top - bottom))
+			var is_crease: bool = creases[i] == 1
+			# Only the strip uses a column's corners, so they may also wander sideways.
+			if is_crease and wander != 0.0:
+				var t: float = (heights[i] - bottom) / (top - bottom)
+				line += along * HexCliffDisplacement.get_column_wander(rest, t, HexLattice.get_spacing(_subdivisions), _cliff, _noise) * wander * strength
 			rests.append(rest)
 			lines.append(line)
-			if HexCliffBands.is_crease(edge, i, _cliff):
+			if is_crease:
 				crease_bands.append(i)
-				pushes.append(HexCliffDisplacement.get_crease_push(rest, strength, _cliff, _noise))
+				var push: float = HexCliffDisplacement.get_crease_push(rest, strength, _cliff, _noise)
+				pushes.append(push + HexCliffDisplacement.get_column_push(edge, i, depth, _cliff) * strength)
 				crease_lines.append(line)
-		HexCliffDisplacement.remove_overhangs(crease_lines, pushes, direction, faces, lower, upper)
+		HexCliffDisplacement.remove_overhangs(
+			crease_lines,
+			pushes,
+			direction,
+			faces,
+			lower,
+			upper,
+			_cliff.lip_depth * strength,
+			_cliff.foot_depth * strength,
+		)
 		var finals: PackedVector3Array = HexCliffDisplacement.place_bands(lines, crease_bands, pushes, direction, lower, upper)
 		for index: int in crease_bands:
 			_creases[Vector4i(origin.x, origin.y, edge.z, index)] = true
@@ -387,28 +410,18 @@ func _get_edge_faces(edge: Vector3i) -> PackedVector2Array:
 # Lattice points on a cliff's rim or base are pushed; all others stay at rest.
 func _get_point_position(point: Vector2i) -> Vector3:
 	var rest: Vector3 = _get_lattice_rest(point)
-	var is_rim: bool = false
-	var is_base: bool = false
-	var strength: float = 0.0
+	var strength: float = 0.0 # Stays 0 unless the point ends a cliff edge
 	for k: int in 6:
 		var neighbor: Vector2i = point + _N[k]
 		var difference: float = rest.y - _get_height(neighbor)
-		if absf(difference) <= _cliff_threshold or not _is_cliff_edge(_get_edge_key(point, neighbor)):
-			continue
-		if difference > 0.0:
-			is_rim = true
-		else:
-			is_base = true
-		strength = maxf(strength, HexCliffDisplacement.get_strength(difference, _settings.elevation_step))
-	if not is_rim and not is_base:
+		if absf(difference) > _cliff_threshold and _is_cliff_edge(_get_edge_key(point, neighbor)):
+			strength = maxf(strength, HexCliffDisplacement.get_strength(difference, _settings.elevation_step))
+	if strength <= 0.0:
 		return rest
-	# Rim and base points inside a strip sit on the line between its facet columns.
+	# Rim and base points inside a strip follow its facet columns.
 	var spot: Vector4i = HexCliffStrip.find_for_point(_data, _subdivisions, point)
 	if spot != HexCliffStrip.NO_POINT:
-		var strip: HexCliffStrip = get_strip(Vector2i(spot.x, spot.y), spot.z % 6)
-		var between: Variant = strip.get_between_position(spot.z >= 6, spot.w, self)
-		if between != null:
-			return between
+		return get_strip(Vector2i(spot.x, spot.y), spot.z % 6).get_point_position(spot.z >= 6, spot.w, self)
 	var faces := PackedVector2Array()
 	for k: int in 6:
 		var b: Vector2i = point + _N[k]
@@ -418,9 +431,9 @@ func _get_point_position(point: Vector2i) -> Vector3:
 	var direction: Vector2 = HexCliffDisplacement.get_average_direction(faces)
 	if direction == Vector2.ZERO:
 		return rest
-	# The push must recede from, or flare toward, every face around the point.
+	# The push must move out from every face around the point.
 	strength *= HexCliffDisplacement.get_fade(direction, faces)
-	var push: float = HexCliffDisplacement.get_edge_push(rest, is_rim, is_base, strength, _edge_max_push, _cliff, _noise)
+	var push: float = HexCliffDisplacement.get_edge_push(rest, strength, _edge_max_push, _cliff, _noise)
 	return rest + Vector3(direction.x, 0.0, direction.y) * push
 
 

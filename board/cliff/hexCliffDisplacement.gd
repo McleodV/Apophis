@@ -8,7 +8,11 @@ const _FADE_START: float = 0.25
 const _FADE_RANGE: float = 0.25
 # A push barely moving a corner along a face's direction can't fix that face.
 const _MIN_RATE: float = 0.01
-# remove_overhangs(): least horizontal lean back per unit of height.
+# Hash seed offset for get_column_push().
+const _DEPTH_SEED: int = 4813
+# get_column_wander(): share of a column's height at each end over which wander fades in.
+const _WANDER_FADE: float = 0.3
+# remove_overhangs(): horizontal lean back per unit of height, when there is room for it.
 const _MIN_LEAN: float = 0.05
 
 
@@ -29,17 +33,26 @@ static func get_crease_push(position: Vector3, strength: float, settings: HexCli
 	return noise.get_relief(position) * settings.relief_amplitude * strength
 
 
-## Push of a rim or base lattice point, clamped to max_push.
-## Rims only recede and bases only flare, so a rim never hangs over its base.
-static func get_edge_push(position: Vector3, is_rim: bool, is_base: bool, strength: float, max_push: float, settings: HexCliffSettings, noise: HexCliffNoise) -> float:
-	var push: float = noise.get_relief(position) * settings.relief_amplitude * settings.edge_relief_scale
-	if is_rim:
-		push -= settings.lip_depth
-	if is_base:
-		push += settings.foot_depth
-	var low: float = -max_push if is_rim else 0.0
-	var high: float = max_push if is_base else 0.0
-	return clampf(push * strength, low, high)
+## Share of a column's depth one facet corner gets, so ridges and grooves step in and out with height.
+static func get_column_push(edge: Vector3i, index: int, depth: float, settings: HexCliffSettings) -> float:
+	var jitter: float = settings.column_depth_jitter * HexCliffNoise.hash01(edge.x, edge.y, edge.z * 1024 + index, settings.noise_seed + _DEPTH_SEED)
+	return depth * (1.0 - jitter)
+
+
+## Sideways shift of a column's facet corner at position, so column edges bend instead of running
+## dead straight. Smooth with height, so neighboring corners shift alike and faces don't fold.
+## Fades out near the rim and base, whose points stay put: t is the corner's height up the column, 0 to 1.
+## spacing: lattice step. Shifts stay under a third of it, so neighboring columns never cross.
+static func get_column_wander(position: Vector3, t: float, spacing: float, settings: HexCliffSettings, noise: HexCliffNoise) -> float:
+	var fade: float = clampf(minf(t, 1.0 - t) / _WANDER_FADE, 0.0, 1.0)
+	return clampf(noise.get_wander(position), -1.0, 1.0) * minf(settings.column_wander, spacing / 3.0) * fade
+
+
+## Push of a rim or base lattice point outside a strip's column ends, from 0 to max_push.
+## Both only push out: rims never pull back behind the grid line, and bases spread into a foot.
+static func get_edge_push(position: Vector3, strength: float, max_push: float, settings: HexCliffSettings, noise: HexCliffNoise) -> float:
+	var amount: float = 0.5 + 0.5 * noise.get_relief(position)
+	return clampf(amount * settings.edge_relief_scale * max_push, 0.0, max_push) * strength
 
 
 ## Appends the unit downhill direction of front-facing triangle a, b, c, unless it's flat.
@@ -58,7 +71,7 @@ static func get_average_direction(faces: PackedVector2Array) -> Vector2:
 
 
 ## How much of a push a vertex keeps when the faces around it look different ways.
-## A rim pushed in must recede from every face; that fails once a face looks against the push.
+## A rim pushed out must move out from every face; that fails once a face looks against the push.
 static func get_fade(direction: Vector2, faces: PackedVector2Array) -> float:
 	var alignment: float = 1.0
 	for face: Vector2 in faces:
@@ -68,39 +81,23 @@ static func get_fade(direction: Vector2, faces: PackedVector2Array) -> float:
 
 ## Adjusts facet corner pushes so no corner sits further out than the one below it,
 ## or further in than the rim above it, in the downhill direction of any face beside the edge.
-## Each step up must also lean back by at least _MIN_LEAN, so faces never stand exactly upright.
+## Each step up also leans back, so faces never stand exactly upright.
+## Where there is room, corners also stay lip out from the rim and foot in from the base.
 ## Removes overhangs and undercuts.
 ## lines: each corner's position before its push, ordered bottom to top. pushes: along direction.
 ## faces: unit downhill directions of the faces beside the edge.
 ## base, rim: final positions of the edge's bottom and top points.
-static func remove_overhangs(lines: PackedVector3Array, pushes: PackedFloat32Array, direction: Vector2, faces: PackedVector2Array, base: Vector3, rim: Vector3) -> void:
-	var limits := PackedFloat32Array() # Per face: how far out the next corner up may sit
-	var height: float = base.y
+static func remove_overhangs(lines: PackedVector3Array, pushes: PackedFloat32Array, direction: Vector2, faces: PackedVector2Array, base: Vector3, rim: Vector3, lip: float, foot: float) -> void:
+	# Lean only as much as the gap between rim and base allows.
+	var room: float = INF
 	for face: Vector2 in faces:
-		limits.append(_get_out(base, face))
-	for i: int in pushes.size():
-		var lean: float = (lines[i].y - height) * _MIN_LEAN
-		for f: int in faces.size():
-			var rate: float = direction.dot(faces[f])
-			var excess: float = _get_out(lines[i], faces[f]) + pushes[i] * rate - (limits[f] - lean)
-			if rate > _MIN_RATE and excess > 0.0:
-				pushes[i] -= excess / rate
-		for f: int in faces.size():
-			limits[f] = _get_out(lines[i], faces[f]) + pushes[i] * direction.dot(faces[f])
-		height = lines[i].y
-	height = rim.y
-	for f: int in faces.size():
-		limits[f] = _get_out(rim, faces[f])
-	for i: int in range(pushes.size() - 1, -1, -1):
-		var lean: float = (height - lines[i].y) * _MIN_LEAN
-		for f: int in faces.size():
-			var rate: float = direction.dot(faces[f])
-			var shortfall: float = limits[f] + lean - _get_out(lines[i], faces[f]) - pushes[i] * rate
-			if rate > _MIN_RATE and shortfall > 0.0:
-				pushes[i] += shortfall / rate
-		for f: int in faces.size():
-			limits[f] = _get_out(lines[i], faces[f]) + pushes[i] * direction.dot(faces[f])
-		height = lines[i].y
+		room = minf(room, _get_out(base, face) - _get_out(rim, face))
+	var lean: float = clampf(0.5 * room / maxf(rim.y - base.y, 0.0001), 0.0, _MIN_LEAN)
+	# Lip and foot first, then the hard limits, which win where both can't fit.
+	_cap_from_base(lines, pushes, direction, faces, base, foot, lean)
+	_floor_from_rim(lines, pushes, direction, faces, rim, lip, lean)
+	_cap_from_base(lines, pushes, direction, faces, base, 0.0, lean)
+	_floor_from_rim(lines, pushes, direction, faces, rim, 0.0, lean)
 
 
 ## Final band positions, bottom to top. Creases are pushed from their line position along direction;
@@ -123,6 +120,42 @@ static func place_bands(lines: PackedVector3Array, crease_bands: PackedInt32Arra
 		previous_point = next_point
 		previous_band = next_band
 	return finals
+
+
+# Bottom up: each corner no further out than the one below it, or than the base less margin.
+static func _cap_from_base(lines: PackedVector3Array, pushes: PackedFloat32Array, direction: Vector2, faces: PackedVector2Array, base: Vector3, margin: float, lean: float) -> void:
+	var limits := PackedFloat32Array() # Per face: how far out the next corner up may sit
+	for face: Vector2 in faces:
+		limits.append(_get_out(base, face) - margin)
+	var height: float = base.y
+	for i: int in pushes.size():
+		var step: float = (lines[i].y - height) * lean
+		for f: int in faces.size():
+			var rate: float = direction.dot(faces[f])
+			var excess: float = _get_out(lines[i], faces[f]) + pushes[i] * rate - (limits[f] - step)
+			if rate > _MIN_RATE and excess > 0.0:
+				pushes[i] -= excess / rate
+		for f: int in faces.size():
+			limits[f] = _get_out(lines[i], faces[f]) + pushes[i] * direction.dot(faces[f])
+		height = lines[i].y
+
+
+# Top down: each corner no further in than the one above it, or than the rim plus margin.
+static func _floor_from_rim(lines: PackedVector3Array, pushes: PackedFloat32Array, direction: Vector2, faces: PackedVector2Array, rim: Vector3, margin: float, lean: float) -> void:
+	var limits := PackedFloat32Array() # Per face: how far in the next corner down may sit
+	for face: Vector2 in faces:
+		limits.append(_get_out(rim, face) + margin)
+	var height: float = rim.y
+	for i: int in range(pushes.size() - 1, -1, -1):
+		var step: float = (height - lines[i].y) * lean
+		for f: int in faces.size():
+			var rate: float = direction.dot(faces[f])
+			var shortfall: float = limits[f] + step - _get_out(lines[i], faces[f]) - pushes[i] * rate
+			if rate > _MIN_RATE and shortfall > 0.0:
+				pushes[i] += shortfall / rate
+		for f: int in faces.size():
+			limits[f] = _get_out(lines[i], faces[f]) + pushes[i] * direction.dot(faces[f])
+		height = lines[i].y
 
 
 static func _get_out(position: Vector3, face: Vector2) -> float:
