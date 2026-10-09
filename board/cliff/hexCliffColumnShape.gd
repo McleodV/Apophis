@@ -1,10 +1,11 @@
 class_name HexCliffColumnShape
 extends Object
 ## Static facet corner placement for a strip's own columns.
-## Corners lie on the column's slab planes, so slabs stay flat. Each column draws its own corner
-## heights, crowding toward the rim, and its corners shift sideways within its room, so slab edges
-## and the seams between them wander. A break gets corners of its own: two close together at a
-## ledge, so the small face between them looks up, or one at a kink.
+## Corners lie on the column's slab tiers, so slabs stay flat, along the column's line, which may
+## slant. Each column draws its own corner heights, crowding toward the rim, and its corners shift
+## sideways within its room, so slab edges and the seams between them wander. A break gets corners
+## of its own, unshifted so they stay on the break line: two close together at a ledge, so the small
+## face between them looks up, or one at a fold.
 ## Up each column, no corner sits further out than the one below.
 
 # Hash seed offsets.
@@ -20,14 +21,18 @@ const _SHIFT_FADE: float = 0.3
 const _SHIFT_RANDOM: float = 0.6
 const _SHIFT_SMOOTH: float = 0.8
 const _SEAM_SMOOTH: float = 1.4
+# Height key offset for seams, clear of column keys.
+const _SEAM_KEY: int = 1000000
 # Corner gap scale at facet_height_taper 1: at the base, and at the rim.
 const _TAPER_BASE: float = 1.5
 const _TAPER_RIM: float = 0.4
 ## Half the height of a ledge's face, in world units. Its corners sit this far above and below the break.
 const LEDGE_RISE: float = 0.012
 
-# How far other corners keep from a break.
+# How far other corners keep from a break, and over what height their sideways shift fades in
+# from none at the break, so edges don't jog sideways there. World units.
 const _BREAK_CLEAR: float = 0.03
+const _BREAK_FADE: float = 0.15
 
 
 ## Corner positions of a column, bottom to top.
@@ -37,25 +42,32 @@ const _BREAK_CLEAR: float = 0.03
 ## scale: 1 = full shape. Lower values calm sideways shift and roughness; slabs keep their planes.
 static func build(column: HexCliffColumn, key: Vector3i, top: Vector3, bottom: Vector3, ends_push: Vector2, frame: HexCliffFrame, settings: HexCliffSettings, noise: HexCliffNoise, scale: float) -> PackedVector3Array:
 	var height: float = top.y - bottom.y
-	var seam: bool = not is_nan(column.seam_center)
+	var seam: bool = column.seam >= 0
 	var anchor: Vector3 = (top + bottom) * 0.5
 	if seam:
-		key = Vector3i(key.x, key.y, roundi(column.seam_center * 1000.0))
-		anchor = frame.to_world(column.seam_center, 0.0, anchor.y)
+		key = Vector3i(key.x, key.y, _SEAM_KEY + column.seam)
+		anchor = frame.to_world(0.5 * (column.seam_line.x + column.seam_line.y), 0.0, anchor.y)
 	var heights: PackedFloat32Array = _get_heights(key, height, anchor, settings, noise)
-	_add_breaks(heights, column, height)
+	var fixed: Dictionary = _add_breaks(heights, column, height)
 	var alongs := PackedFloat32Array()
 	for i: int in heights.size():
 		var t: float = heights[i] / height
-		var fade: float = clampf(minf(t, 1.0 - t) / _SHIFT_FADE, 0.0, 1.0)
+		var fade: float = 0.0 if fixed.has(heights[i]) else clampf(minf(t, 1.0 - t) / _SHIFT_FADE, 0.0, 1.0)
+		for at: float in fixed:
+			fade = minf(fade, absf(heights[i] - at) / _BREAK_FADE)
 		var shift: float
 		if seam:
-			shift = _SEAM_SMOOTH * noise.get_wander(frame.to_world(column.seam_center, 0.0, bottom.y + heights[i]))
+			var middle: float = lerpf(column.seam_line.x, column.seam_line.y, t)
+			shift = _SEAM_SMOOTH * noise.get_wander(frame.to_world(middle, 0.0, bottom.y + heights[i]))
 		else:
 			var random: float = 2.0 * HexCliffNoise.hash01(key.x, key.y, key.z * 256 + i, settings.noise_seed + _SHIFT_SEED) - 1.0
-			shift = _SHIFT_RANDOM * random + _SHIFT_SMOOTH * noise.get_wander(frame.to_world(column.along, 0.0, bottom.y + heights[i]))
-		alongs.append(column.along + clampf(shift, -1.0, 1.0) * fade * column.room * settings.slab_edge_wander * scale)
-	_converge(alongs, heights, frame.get_along(bottom), frame.get_along(top), height, frame.get_step())
+			shift = _SHIFT_RANDOM * random + _SHIFT_SMOOTH * noise.get_wander(frame.to_world(column.get_along(t), 0.0, bottom.y + heights[i]))
+		alongs.append(column.get_along(t) + clampf(shift, -1.0, 1.0) * fade * column.room * settings.slab_edge_wander * scale)
+	if column.is_straight:
+		for i: int in alongs.size():
+			alongs[i] = lerpf(frame.get_along(bottom), frame.get_along(top), heights[i] / height)
+	else:
+		_converge(alongs, heights, frame.get_along(bottom), frame.get_along(top), height, frame.get_step())
 	var bottom_out: float = frame.get_out(bottom)
 	var top_out: float = frame.get_out(top)
 	var lines := PackedVector3Array()
@@ -64,8 +76,8 @@ static func build(column: HexCliffColumn, key: Vector3i, top: Vector3, bottom: V
 		var t: float = heights[i] / height
 		var line: Vector3 = frame.to_world(alongs[i], lerpf(bottom_out, top_out, t), bottom.y + heights[i])
 		lines.append(line)
-		# Forced columns have no plane: their corners stay on the straight line between their ends.
-		if column.lower == null:
+		# Forced columns have no slab: their corners stay on the straight line between their ends.
+		if column.slab == null or column.is_straight:
 			pushes.append(0.0)
 			continue
 		var push: float = column.get_push(alongs[i], t) + noise.get_relief(line) * settings.slab_roughness * scale
@@ -79,8 +91,10 @@ static func build(column: HexCliffColumn, key: Vector3i, top: Vector3, bottom: V
 	return corners
 
 
-# Replaces corners near each of the column's breaks with the break's own: two around a ledge, one at a kink.
-static func _add_breaks(heights: PackedFloat32Array, column: HexCliffColumn, height: float) -> void:
+# Replaces corners near each of the column's breaks with the break's own: two around a ledge, one
+# at a fold. Returns the added heights, as keys.
+static func _add_breaks(heights: PackedFloat32Array, column: HexCliffColumn, height: float) -> Dictionary:
+	var added_heights: Dictionary = {}
 	for entry: Vector3 in column.breaks:
 		var at: float = entry.x * height
 		var rise: float = LEDGE_RISE * entry.y
@@ -93,6 +107,8 @@ static func _add_breaks(heights: PackedFloat32Array, column: HexCliffColumn, hei
 		var added := PackedFloat32Array([at - rise, at + rise]) if entry.y > 0.0 else PackedFloat32Array([at])
 		for value: float in added:
 			heights.insert(heights.bsearch(value), value)
+			added_heights[heights[heights.bsearch(value)]] = true
+	return added_heights
 
 
 # Pulls corners within a lattice step of height from an end toward that end's along position,
