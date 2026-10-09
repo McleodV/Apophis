@@ -75,7 +75,11 @@ func _init(tile: Vector2i, side: int, subdivisions: int, settings: HexCliffSetti
 		_get_spoke_line(rim[0], base[0], surface),
 		_get_spoke_line(rim[subdivisions], base[subdivisions - 1], surface),
 	]
-	columns = HexCliffColumnLayout.pick(tile, side, subdivisions, settings, PackedInt32Array(sorted), max_push, spokes)
+	var wall_height: float = (
+		surface.get_rest_position(HexTerrainSurface.get_lattice_key(rim[subdivisions >> 1])).y
+		- surface.get_rest_position(HexTerrainSurface.get_lattice_key(base[(subdivisions - 1) >> 1])).y
+	)
+	columns = HexCliffColumnLayout.pick(tile, side, subdivisions, settings, PackedInt32Array(sorted), max_push, spokes, wall_height)
 
 
 ## True if the lattice edge between a and b is a spoke of an active strip: the edge from a hex
