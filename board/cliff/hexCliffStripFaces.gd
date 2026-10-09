@@ -1,15 +1,15 @@
 class_name HexCliffStripFaces
 extends Object
 ## Static assembly of a cliff strip's faces from its columns.
-## Spoke columns keep their shared bands. Other columns get the strip's own corners; a merging
-## column ends on a corner of its neighbor. Neighboring columns are joined pair by pair
-## (HexCliffStitcher.stitch_columns()); rim and base points between column ends lie on the faces'
-## straight sides. Then HexCliffSlope keeps every face upright.
+## Spoke columns keep their shared bands, which lie on a straight line. Other columns get the strip's
+## own corners. Neighboring columns are joined pair by pair (HexCliffStitcher.stitch_columns()), cut
+## at the breaks they share so slabs stay flat on both sides of a break; rim and base points between
+## column ends lie on the faces' straight sides. Then HexCliffSlope keeps every face upright.
 
 
 ## The faces of strip, or null if a face with a free corner can't be kept upright.
 ## scale: 1 = full corner shape, lower calms it (see HexCliffColumnShape.build()), 0 = no corners:
-## columns run straight from rim to base. A merging column then runs to its neighbor's base point.
+## columns run straight from rim to base.
 ## On success, the strip's own corners are written to corner_positions and corner_rests by index.
 static func build(strip: HexCliffStrip, surface: HexTerrainSurface, settings: HexCliffSettings, noise: HexCliffNoise, scale: float, corner_positions: PackedVector3Array, corner_rests: PackedVector3Array) -> HexTerrainSurface.Triangle:
 	var rim: Array[Vector2i] = strip.rim
@@ -21,9 +21,12 @@ static func build(strip: HexCliffStrip, surface: HexTerrainSurface, settings: He
 		strip.outward,
 		HexLattice.get_spacing(subdivisions),
 	)
+	var vertices := _Vertices.new()
+	var chains: Array[PackedInt32Array] = []
+	var between: Dictionary = {} # Vector2i(facet corner, next facet corner) -> points between them
+	var corners := PackedInt32Array() # Local index by corner index
 	var used: Array[HexCliffColumn] = []
-	var order := PackedInt32Array() # Index in strip.columns, by used index
-	var merging := PackedInt32Array() # Merge side by used index: 0 when there are no corners to merge into
+	var break_corners: Array[Dictionary] = [] # Per used column: break id -> Vector2i(upper, lower) local indices
 	for c: int in strip.columns.size():
 		var column: HexCliffColumn = strip.columns[c]
 		var previous: HexCliffColumn = null if used.is_empty() else used[used.size() - 1]
@@ -31,63 +34,36 @@ static func build(strip: HexCliffStrip, surface: HexTerrainSurface, settings: He
 		if scale == 0.0 and previous and previous.top == column.top and previous.bottom == column.bottom:
 			continue
 		used.append(column)
-		order.append(c)
-		merging.append(column.merge_side if scale > 0.0 else 0)
-	var vertices := _Vertices.new()
-	var between: Dictionary = {} # Vector2i(facet corner, next facet corner) -> points between them
-	var corners := PackedInt32Array() # Local index by corner index
-	var chains: Array[PackedInt32Array] = []
-	chains.resize(used.size())
-	var merges := PackedInt32Array() # Per used column: index of its merge corner in the neighbor's chain, or -1
-	merges.resize(used.size())
-	merges.fill(-1)
-	# Columns running to the base first, so merging ones can end on their corners.
-	for second: bool in [false, true]:
-		for u: int in used.size():
-			var column: HexCliffColumn = used[u]
-			if (merging[u] != 0) != second:
-				continue
-			var top_key: Vector4i = HexTerrainSurface.get_lattice_key(rim[column.top])
-			var bottom_key: Vector4i = HexTerrainSurface.get_lattice_key(base[column.bottom])
-			if column.is_spoke:
-				chains[u] = _add_spoke(top_key, bottom_key, surface, vertices, between)
-				continue
-			var chain := PackedInt32Array([vertices.add(top_key, surface)])
-			var top: Vector3 = surface.get_position(top_key)
-			var wall := Vector2(surface.get_position(bottom_key).y, top.y)
-			var end: int = vertices.add(bottom_key, surface)
-			if second:
-				var target: PackedInt32Array = chains[u + merging[u]]
-				merges[u] = _get_merge_corner(target, lerpf(wall.x, wall.y, column.merge_height), vertices)
-				end = target[merges[u]]
-			if scale > 0.0:
-				var bottom: Vector3 = vertices.positions[end]
-				var top_rest: Vector3 = surface.get_rest_position(top_key)
-				var bottom_rest: Vector3 = vertices.rest[end]
-				var ends_push := Vector2(frame.get_out(bottom) - frame.get_out(bottom_rest), frame.get_out(top) - frame.get_out(top_rest))
-				var shape: PackedVector3Array = HexCliffColumnShape.build(column, Vector3i(strip.id.x, strip.id.y, strip.id.z * 64 + order[u]), top, bottom, ends_push, wall, frame, settings, noise, scale)
-				for i: int in range(shape.size() - 1, -1, -1):
-					var t: float = (shape[i].y - bottom.y) / (top.y - bottom.y)
-					var index: int = vertices.add_free(HexCliffStrip.get_corner_key(strip.id, corners.size()), bottom_rest.lerp(top_rest, t), shape[i])
-					corners.append(index)
-					chain.append(index)
-			chain.append(end)
-			chains[u] = chain
+		break_corners.append({})
+		var top_key: Vector4i = HexTerrainSurface.get_lattice_key(rim[column.top])
+		var bottom_key: Vector4i = HexTerrainSurface.get_lattice_key(base[column.bottom])
+		if column.is_spoke:
+			chains.append(_add_spoke(top_key, bottom_key, surface, vertices))
+			continue
+		var chain := PackedInt32Array([vertices.add(top_key, surface)])
+		var end: int = vertices.add(bottom_key, surface)
+		if scale > 0.0:
+			var top: Vector3 = vertices.positions[chain[0]]
+			var bottom: Vector3 = vertices.positions[end]
+			var top_rest: Vector3 = vertices.rest[chain[0]]
+			var bottom_rest: Vector3 = vertices.rest[end]
+			var ends_push := Vector2(frame.get_out(bottom) - frame.get_out(bottom_rest), frame.get_out(top) - frame.get_out(top_rest))
+			var shape: PackedVector3Array = HexCliffColumnShape.build(column, Vector3i(strip.id.x, strip.id.y, strip.id.z * 64 + c), top, bottom, ends_push, frame, settings, noise, scale)
+			for i: int in range(shape.size() - 1, -1, -1):
+				var t: float = (shape[i].y - bottom.y) / (top.y - bottom.y)
+				var index: int = vertices.add_free(HexCliffStrip.get_corner_key(strip.id, corners.size()), bottom_rest.lerp(top_rest, t), shape[i])
+				corners.append(index)
+				chain.append(index)
+			_find_breaks(column, chain, bottom.y, top.y - bottom.y, vertices, break_corners[break_corners.size() - 1])
+		chain.append(end)
+		chains.append(chain)
 	var lefts: Array[PackedInt32Array] = []
 	var rights: Array[PackedInt32Array] = []
 	for u: int in used.size() - 1:
-		var pair: Array[PackedInt32Array]
-		# A merging column and its neighbor share the merge corner, so their face has no base side.
-		if merging[u + 1] < 0:
-			pair = [chains[u].slice(0, merges[u + 1] + 1), chains[u + 1]]
-		elif merging[u] > 0:
-			pair = [chains[u], chains[u + 1].slice(0, merges[u] + 1)]
-		else:
-			pair = [_get_side(chains, merges, merging, u, 1), _get_side(chains, merges, merging, u + 1, -1)]
-			_add_base_side(base, pair, used[u].bottom, used[u + 1].bottom, surface, vertices, between)
+		var pair: Array[PackedInt32Array] = [chains[u], chains[u + 1]]
 		_add_rim_side(rim, pair, used[u].top, used[u + 1].top, surface, vertices, between)
-		lefts.append(pair[0])
-		rights.append(pair[1])
+		_add_base_side(base, pair, used[u].bottom, used[u + 1].bottom, surface, vertices, between)
+		_split_at_breaks(pair, break_corners[u], break_corners[u + 1], lefts, rights)
 	var faces: PackedInt32Array = HexCliffStitcher.stitch_columns(lefts, rights, between, vertices.rest, vertices.positions, strip.outward)
 	if not corners.is_empty() and not HexCliffSlope.enforce(faces, vertices.positions, vertices.free, strip.outward):
 		return null
@@ -103,39 +79,61 @@ static func build(strip: HexCliffStrip, surface: HexTerrainSurface, settings: He
 	return triangle
 
 
-# Chain bounding the face beside used column u, rim to base. toward: 1 for the face after u, -1 for
-# the face before it. Seen from the side away from the neighbor it merges into, a merging column
-# continues down that neighbor.
-static func _get_side(chains: Array[PackedInt32Array], merges: PackedInt32Array, merging: PackedInt32Array, u: int, toward: int) -> PackedInt32Array:
-	var side: int = merging[u]
-	if side == 0 or side == toward:
-		return chains[u]
-	var target: PackedInt32Array = chains[u + side]
-	return chains[u] + target.slice(merges[u] + 1)
+# Local indices of the corners of each of column's breaks in chain, by break id: Vector2i(upper, lower).
+# A kink's one corner is both.
+static func _find_breaks(column: HexCliffColumn, chain: PackedInt32Array, bottom: float, height: float, vertices: _Vertices, found: Dictionary) -> void:
+	for entry: Vector3 in column.breaks:
+		var at: float = bottom + entry.x * height
+		var rise: float = HexCliffColumnShape.LEDGE_RISE * entry.y
+		var upper: int = _find_height(chain, at + rise, vertices)
+		var lower: int = _find_height(chain, at - rise, vertices)
+		if upper >= 0 and lower >= 0:
+			found[int(entry.z)] = Vector2i(upper, lower)
 
 
-# Index in chain of the corner nearest height, not counting its ends.
-static func _get_merge_corner(chain: PackedInt32Array, height: float, vertices: _Vertices) -> int:
-	var best: int = 1
-	for i: int in range(2, chain.size() - 1):
-		if absf(vertices.positions[chain[i]].y - height) < absf(vertices.positions[chain[best]].y - height):
-			best = i
-	return best
+static func _find_height(chain: PackedInt32Array, height: float, vertices: _Vertices) -> int:
+	for index: int in chain:
+		if absf(vertices.positions[index].y - height) < 1e-5:
+			return index
+	return -1
 
 
-# Spokes are shared, so they keep every band. Bands that aren't facet corners lie between corners.
-static func _add_spoke(top_key: Vector4i, bottom_key: Vector4i, surface: HexTerrainSurface, vertices: _Vertices, between: Dictionary) -> PackedInt32Array:
+# Adds the pair as faces to join, cut at the breaks both columns share, so no face reaches from one
+# side of a break to the other. A ledge gets a face pair of its own between its corners.
+static func _split_at_breaks(pair: Array[PackedInt32Array], left_breaks: Dictionary, right_breaks: Dictionary, lefts: Array[PackedInt32Array], rights: Array[PackedInt32Array]) -> void:
+	var left: PackedInt32Array = pair[0]
+	var right: PackedInt32Array = pair[1]
+	var cuts: Array[Vector4i] = [] # Chain positions: left upper, left lower, right upper, right lower
+	for id: int in left_breaks:
+		if not right_breaks.has(id):
+			continue
+		var l: Vector2i = left_breaks[id]
+		var r: Vector2i = right_breaks[id]
+		cuts.append(Vector4i(left.find(l.x), left.find(l.y), right.find(r.x), right.find(r.y)))
+	cuts.sort_custom(func(a: Vector4i, b: Vector4i) -> bool: return a.x < b.x)
+	var left_start: int = 0
+	var right_start: int = 0
+	for cut: Vector4i in cuts:
+		# Skip cuts out of order on either side; the next pass still joins everything.
+		if cut.x <= left_start or cut.z <= right_start or cut.y < cut.x or cut.w < cut.z:
+			continue
+		lefts.append(left.slice(left_start, cut.x + 1))
+		rights.append(right.slice(right_start, cut.z + 1))
+		if cut.y > cut.x or cut.w > cut.z:
+			lefts.append(left.slice(cut.x, cut.y + 1))
+			rights.append(right.slice(cut.z, cut.w + 1))
+		left_start = cut.y
+		right_start = cut.w
+	lefts.append(left.slice(left_start))
+	rights.append(right.slice(right_start))
+
+
+# Spokes are shared, so they keep every band. They are straight, and every band joins the
+# neighboring column level by level, so no long thin fans reach across the slab.
+static func _add_spoke(top_key: Vector4i, bottom_key: Vector4i, surface: HexTerrainSurface, vertices: _Vertices) -> PackedInt32Array:
 	var chain := PackedInt32Array()
-	var pending := PackedInt32Array()
 	for vertex: Vector4i in surface.get_chain(Vector2i(top_key.x, top_key.y), Vector2i(bottom_key.x, bottom_key.y)):
-		var index: int = vertices.add(vertex, surface)
-		if HexTerrainSurface.is_lattice_key(vertex) or surface.is_crease_key(vertex):
-			if not pending.is_empty():
-				between[Vector2i(chain[chain.size() - 1], index)] = pending
-				pending = PackedInt32Array()
-			chain.append(index)
-		else:
-			pending.append(index)
+		chain.append(vertices.add(vertex, surface))
 	return chain
 
 
