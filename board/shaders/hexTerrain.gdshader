@@ -8,7 +8,7 @@ shader_type spatial;
 // Separates the x and y border warp samples.
 const vec2 WARP_OFFSET = vec2(57.3, 113.9);
 // How far outside a cliff's height span a face may reach and still count as part of it, in world units.
-const float CLIFF_SPAN_TOLERANCE = 0.02;
+const float CLIFF_SPAN_TOLERANCE = 0.03;
 
 // R = dominant type, G = dominant value (0 = none), B = elevation. Pixel = axial + map_radius.
 uniform sampler2D tile_data : filter_nearest, repeat_disable;
@@ -185,6 +185,35 @@ vec2 get_border_warp(vec2 point) {
 }
 
 
+// Ground height in levels at point, as seen from tile (axial, data): sloping toward neighbors within a
+// level, flat toward those across a cliff or off the map. Mirrors HexTerrainHeight._get_owner_level().
+float get_level(vec2 point, ivec2 axial, ivec4 tile) {
+	vec2 offset = point - hex_axial_to_world(axial, outer_radius);
+	int corner = 0;
+	float corner_dot = -1e9;
+	for (int i = 0; i < 6; i++) {
+		float c = dot(offset, HEX_CORNER_DIRS[i]);
+		if (c > corner_dot) {
+			corner_dot = c;
+			corner = i;
+		}
+	}
+	int next = (corner + 1) % 6;
+	vec3 levels = vec3(float(tile.b));
+	for (int i = 0; i < 2; i++) {
+		ivec2 neighbor = axial + HEX_DIRECTIONS[i == 0 ? corner : next];
+		if (has_tile(neighbor)) {
+			int level = read_tile(neighbor).b;
+			if (abs(level - tile.b) <= 1) {
+				levels[i + 1] = float(level);
+			}
+		}
+	}
+	vec3 w = get_weights(offset, corner, next, outer_radius * HEX_SQRT3 * 0.5);
+	return blend(w, vec3(levels.x), vec3(levels.y), vec3(levels.z), blend_band).x;
+}
+
+
 // How much rock shows where a cliff meets a tile: 1 on the face, 0 on the tile.
 // across: signed distance from the junction, in world units: above 0 onto the tile, below 0 onto the
 // face. face, tile: how far the blend reaches each way. The junction wanders with noise at point,
@@ -270,7 +299,8 @@ void fragment() {
 
 	if (is_cliff) {
 		// The cliff this face belongs to: the nearest of those borders that is a cliff and whose
-		// height span holds this point. Its rim takes the upper tile's color, its foot the lower's.
+		// height span, from its foot to its rim by this point, holds it. Its rim takes the upper
+		// tile's color, its foot the lower's.
 		vec3 face = cliff_color.rgb;
 		float tile_cover = 0.0;
 		float nearest = 1e9;
@@ -282,8 +312,21 @@ void fragment() {
 				continue;
 			}
 			bool first_high = first.b > second.b;
-			float rim = float(max(first.b, second.b)) * elevation_step;
-			float foot = float(min(first.b, second.b)) * elevation_step;
+			ivec2 first_axial = i == 2 ? axial_a : owner;
+			ivec2 second_axial = i == 0 ? axial_a : axial_b;
+			// Rim and foot heights by this point: the upper tile's ground where it meets the border,
+			// and the lower tile's a lattice row in from it. Either may slope toward a third tile.
+			vec2 toward = HEX_NEIGHBOR_DIRS[i == 0 ? corner : next];
+			vec2 rim_point = i == 2
+				? hex_axial_to_world(owner, outer_radius) + HEX_CORNER_DIRS[corner] * outer_radius
+				: point + toward * border_distance[i];
+			vec2 foot_point = i == 2 ? point : rim_point + (first_high ? toward : -toward) * lattice_row;
+			float rim = elevation_step * (first_high
+				? get_level(rim_point, first_axial, first)
+				: get_level(rim_point, second_axial, second));
+			float foot = elevation_step * (first_high
+				? get_level(foot_point, second_axial, second)
+				: get_level(foot_point, first_axial, first));
 			if (v_height < foot - CLIFF_SPAN_TOLERANCE || v_height > rim + CLIFF_SPAN_TOLERANCE) {
 				continue;
 			}
