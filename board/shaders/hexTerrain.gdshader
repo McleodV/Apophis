@@ -7,12 +7,18 @@ shader_type spatial;
 
 // Separates the x and y border warp samples.
 const vec2 WARP_OFFSET = vec2(57.3, 113.9);
+// How far outside a cliff's height span a face may reach and still count as part of it, in world units.
+const float CLIFF_SPAN_TOLERANCE = 0.02;
 
 // R = dominant type, G = dominant value (0 = none), B = elevation. Pixel = axial + map_radius.
 uniform sampler2D tile_data : filter_nearest, repeat_disable;
 uniform int map_radius = 0;
 uniform float outer_radius = 1.0;
 uniform float blend_band = 0.4;
+// World height of one elevation level, and the gap between lattice rows: how far a cliff's
+// foot lies out from its tile edge.
+uniform float elevation_step = 0.3;
+uniform float lattice_row = 0.144;
 
 uniform vec4 base_color : source_color = vec4(0.55, 0.56, 0.42, 1.0);
 uniform vec4 cliff_color : source_color = vec4(0.42, 0.4, 0.37, 1.0);
@@ -32,10 +38,26 @@ uniform float border_warp_frequency = 1.5;
 // Cliff shading from smooth (0) to flat per face (1).
 uniform float cliff_faceting = 1.0;
 
+// Where a cliff meets a tile, at its rim and foot, tile color reaches onto the face and rock onto
+// the tile, by these world distances, give or take cliff_blend_noise.
+uniform float rim_blend_down = 0.18;
+uniform float rim_blend_in = 0.08;
+uniform float foot_blend_up = 0.1;
+uniform float foot_blend_out = 0.08;
+uniform float cliff_blend_noise = 0.08;
+uniform float cliff_blend_frequency = 8.0;
+// How far tile-colored parts of a face shade smooth instead of faceted.
+uniform float cliff_blend_smoothing = 1.0;
+// 0 = rim and foot blends fade smoothly, 1 = they break into patches of tile color and rock.
+uniform float cliff_blend_patchiness = 0.0;
+uniform float cliff_patch_frequency = 18.0;
+
 // Undisplaced xz from the mesh UV. Cliff displacement doesn't move tile colors.
 varying vec2 v_rest;
 // 1 on cliff faces, from vertex color red. Constant per face.
 varying float v_cliff;
+// World height.
+varying float v_height;
 
 
 bool has_tile(ivec2 axial) {
@@ -163,9 +185,26 @@ vec2 get_border_warp(vec2 point) {
 }
 
 
+// How much rock shows where a cliff meets a tile: 1 on the face, 0 on the tile.
+// across: signed distance from the junction, in world units: above 0 onto the tile, below 0 onto the
+// face. face, tile: how far the blend reaches each way. The junction wanders with noise at point,
+// and patches follow noise at point and height, so both sides of it agree.
+float get_rock(float across, float face, float tile, vec2 point, float height) {
+	float shift = border_noise(point * cliff_blend_frequency + WARP_OFFSET) * cliff_blend_noise;
+	float rock = 1.0 - smoothstep(-face, tile + 0.0001, across + shift);
+	// Patches: noise pushes each spot toward rock or tile, most midway, and a narrower fade sharpens them.
+	vec2 patch_point = (point + vec2(height * 1.7, -height)) * cliff_patch_frequency;
+	float patch_noise = noise_value(patch_point) * 0.65 + noise_value(patch_point * 2.3 + WARP_OFFSET) * 0.35;
+	rock += patch_noise * cliff_blend_patchiness * 2.0 * rock * (1.0 - rock);
+	float fade = mix(0.55, 0.06, cliff_blend_patchiness);
+	return smoothstep(0.5 - fade, 0.5 + fade, rock);
+}
+
+
 void vertex() {
 	v_rest = UV;
 	v_cliff = COLOR.r;
+	v_height = (MODEL_MATRIX * vec4(VERTEX, 1.0)).y;
 }
 
 
@@ -221,9 +260,59 @@ void fragment() {
 	split = blend(split, vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), vec3(0.0, 0.0, 1.0), border_blend);
 	vec3 color = split.x * color_owner + split.y * color_a + split.z * color_b;
 
+	// Distances to the three tile borders meeting at the nearest corner: the owner's two sides, and
+	// the border between its two neighbors there, which starts at the corner.
+	vec3 border_distance = vec3(
+		inner_radius - dot(offset, HEX_NEIGHBOR_DIRS[corner]),
+		inner_radius - dot(offset, HEX_NEIGHBOR_DIRS[next]),
+		length(offset - HEX_CORNER_DIRS[corner] * outer_radius)
+	);
+
 	if (is_cliff) {
-		color = cliff_color.rgb;
-		NORMAL = normalize(mix(NORMAL, face_normal, cliff_faceting));
+		// The cliff this face belongs to: the nearest of those borders that is a cliff and whose
+		// height span holds this point. Its rim takes the upper tile's color, its foot the lower's.
+		vec3 face = cliff_color.rgb;
+		float tile_cover = 0.0;
+		float nearest = 1e9;
+		for (int i = 0; i < 3; i++) {
+			ivec4 first = i == 2 ? tile_a : own;
+			ivec4 second = i == 0 ? tile_a : tile_b;
+			bool on_both = (i == 2 ? on_a : on_owner) && (i == 0 ? on_a : on_b);
+			if (!on_both || abs(first.b - second.b) < 2 || border_distance[i] >= nearest) {
+				continue;
+			}
+			bool first_high = first.b > second.b;
+			float rim = float(max(first.b, second.b)) * elevation_step;
+			float foot = float(min(first.b, second.b)) * elevation_step;
+			if (v_height < foot - CLIFF_SPAN_TOLERANCE || v_height > rim + CLIFF_SPAN_TOLERANCE) {
+				continue;
+			}
+			nearest = border_distance[i];
+			// The owner's own color here where it is one of the two, so the face matches its tile.
+			vec3 high_color = i < 2 && first_high ? color : get_tile_color(first_high ? first : second);
+			vec3 low_color = i < 2 && !first_high ? color : get_tile_color(first_high ? second : first);
+			float top = 1.0 - get_rock(v_height - rim, rim_blend_down, rim_blend_in, point, v_height);
+			float bottom = 1.0 - get_rock(foot - v_height, foot_blend_up, foot_blend_out, point, v_height);
+			face = mix(mix(cliff_color.rgb, high_color, top), low_color, bottom);
+			tile_cover = max(top, bottom);
+		}
+		color = face;
+		NORMAL = normalize(mix(NORMAL, face_normal, cliff_faceting * (1.0 - tile_cover * cliff_blend_smoothing)));
+	} else {
+		// Rock onto the tile from the rim above a cliff, or from the foot below one, on either nearest
+		// side. The foot lies a lattice row out from the edge.
+		float rock = 0.0;
+		for (int i = 0; i < 2; i++) {
+			bool on = i == 0 ? on_a : on_b;
+			ivec4 tile = i == 0 ? tile_a : tile_b;
+			if (!on || abs(tile.b - own.b) < 2) {
+				continue;
+			}
+			rock = max(rock, own.b > tile.b
+				? get_rock(border_distance[i], rim_blend_down, rim_blend_in, point, v_height)
+				: get_rock(border_distance[i] - lattice_row, foot_blend_up, foot_blend_out, point, v_height));
+		}
+		color = mix(color, cliff_color.rgb, rock);
 	}
 
 	ALBEDO = color;

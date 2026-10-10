@@ -15,6 +15,8 @@ static func create() -> ShaderMaterial:
 static func apply_settings(material: ShaderMaterial, settings: HexTerrainSettings) -> void:
 	material.set_shader_parameter("outer_radius", HexMath.OUTER_RADIUS)
 	material.set_shader_parameter("blend_band", settings.blend_band)
+	material.set_shader_parameter("elevation_step", settings.elevation_step)
+	material.set_shader_parameter("lattice_row", HexLattice.get_spacing(settings.subdivisions) * sqrt(0.75))
 
 
 static func apply_style(material: ShaderMaterial, style: HexTerrainStyle) -> void:
@@ -23,6 +25,15 @@ static func apply_style(material: ShaderMaterial, style: HexTerrainStyle) -> voi
 	material.set_shader_parameter("border_warp", style.border_warp)
 	material.set_shader_parameter("border_warp_frequency", style.border_warp_frequency)
 	material.set_shader_parameter("cliff_faceting", style.cliff_faceting)
+	material.set_shader_parameter("rim_blend_down", style.rim_blend_down)
+	material.set_shader_parameter("rim_blend_in", style.rim_blend_in)
+	material.set_shader_parameter("foot_blend_up", style.foot_blend_up)
+	material.set_shader_parameter("foot_blend_out", style.foot_blend_out)
+	material.set_shader_parameter("cliff_blend_noise", style.cliff_blend_noise)
+	material.set_shader_parameter("cliff_blend_frequency", style.cliff_blend_frequency)
+	material.set_shader_parameter("cliff_blend_smoothing", style.cliff_blend_smoothing)
+	material.set_shader_parameter("cliff_blend_patchiness", style.cliff_blend_patchiness)
+	material.set_shader_parameter("cliff_patch_frequency", style.cliff_patch_frequency)
 
 
 ## Tile texture, map size, and biome palette. A missing biome or palette uses palette defaults.

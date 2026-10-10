@@ -19,6 +19,24 @@ extends Resource
 @export_group("Cliffs")
 ## Cliff shading from smooth (0) to flat per face (1). Higher = crisper facets.
 @export_range(0.0, 1.0, 0.01) var cliff_faceting: float = 1.0
+## How far tile color reaches down a cliff face from its rim, in world units.
+@export_range(0.0, 0.5, 0.005) var rim_blend_down: float = 0.18
+## How far cliff rock reaches onto the tile from a cliff's rim, in world units.
+@export_range(0.0, 0.5, 0.005) var rim_blend_in: float = 0.08
+## How far tile color reaches up a cliff face from its foot, in world units.
+@export_range(0.0, 0.5, 0.005) var foot_blend_up: float = 0.1
+## How far cliff rock reaches onto the tile from a cliff's foot, in world units.
+@export_range(0.0, 0.5, 0.005) var foot_blend_out: float = 0.08
+## How unevenly the rim and foot blends reach, in world units. 0 = straight along the cliff.
+@export_range(0.0, 0.3, 0.005) var cliff_blend_noise: float = 0.08
+## How often the rim and foot blends change reach along a cliff. Higher = more wiggles.
+@export_range(0.5, 20.0, 0.1) var cliff_blend_frequency: float = 8.0
+## Where tile color covers a cliff face, how far its shading turns from flat facets to smooth like the tile.
+@export_range(0.0, 1.0, 0.01) var cliff_blend_smoothing: float = 1.0
+## 0 = rim and foot blends fade smoothly, 1 = they break into patches of tile color and rock.
+@export_range(0.0, 1.0, 0.01) var cliff_blend_patchiness: float = 0.0
+## Size of those patches. Higher = smaller patches.
+@export_range(1.0, 60.0, 0.5) var cliff_patch_frequency: float = 18.0
 
 @export_group("Grid")
 @export var grid_color := Color(0.05, 0.05, 0.05, 0.45)
