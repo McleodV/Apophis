@@ -13,6 +13,6 @@ extends Resource
 @export_range(2, 32) var chunk_size: int = 8
 ## How far cliff edge normals bend toward the surrounding ground.
 ## Higher = rounder cliff lips, flatter-looking cliff faces.
-@export_range(0.0, 1.0, 0.01) var cliff_edge_softness: float = 0.15
+@export_range(0.0, 1.0, 0.01) var cliff_edge_softness: float = 0.4
 ## Cliff face shape. Leave empty to use defaults.
 @export var cliff: HexCliffSettings
